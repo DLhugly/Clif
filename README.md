@@ -50,6 +50,16 @@ No Electron. No telemetry. No subscription. Open source.
 
 > [All releases & checksums](https://github.com/DLhugly/Clif/releases)
 
+### macOS — "App can't be opened"
+
+Clif is open source but not yet notarized with Apple ($99/year). macOS blocks unsigned apps by default. This is normal for open source software — run one command to fix it:
+
+```bash
+xattr -cr /Applications/Clif.app
+```
+
+Then open Clif normally. This removes the quarantine flag that macOS sets on downloads. [Why does this happen?](#faq)
+
 **From source** —
 ```bash
 git clone https://github.com/DLhugly/Clif.git && cd Clif
@@ -130,6 +140,17 @@ src-tauri/src/           # Rust backend
 ```
 
 [Conventional commits](https://www.conventionalcommits.org/) — `feat:` bumps minor, `fix:` bumps patch, `feat!:` bumps major. Semantic release handles the rest.
+
+## FAQ
+
+**Why does macOS say "App can't be opened"?**
+macOS Gatekeeper blocks apps that aren't signed with a $99/year Apple Developer certificate. Clif is open source and safe — run `xattr -cr /Applications/Clif.app` in Terminal to remove the quarantine flag, then open normally.
+
+**Is Clif safe?**
+100% open source. Read every line: [github.com/DLhugly/Clif](https://github.com/DLhugly/Clif). No telemetry, no network calls unless you enable AI. The `xattr` command just removes Apple's download flag — it doesn't disable any security.
+
+**Why not just pay for code signing?**
+We will. For now, the $99/year Apple Developer fee goes toward more important things. Proper signing + notarization is on the roadmap.
 
 ## License
 

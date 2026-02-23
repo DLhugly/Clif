@@ -217,6 +217,7 @@
       <div class="links">
         <a href="#features">Features</a>
         <a href="#download">Download</a>
+        <a href="#faq">FAQ</a>
         <a href="https://github.com/DLhugly/Clif" class="gh">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
           GitHub
@@ -344,6 +345,39 @@
           <div class="tag">0 tracking</div>
           <h3>Privacy first</h3>
           <p>No telemetry. No cloud sync. No account. No subscription. Your code stays on your machine. Period.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- MACOS INSTALL -->
+  <section class="source" id="macos-install">
+    <div class="container">
+      <h2>macOS — "App can't be opened"?</h2>
+      <p>Clif is open source but not yet notarized with Apple. macOS blocks unsigned apps by default.<br>This is normal for open source software. One command fixes it:</p>
+      <div class="code-block">
+        <span class="dim">$</span> <span class="cmd">xattr -cr /Applications/Clif.app</span>
+      </div>
+      <p style="margin-top: 16px; font-size: 14px; color: var(--muted);">This removes the quarantine flag macOS sets on downloads. Then open Clif normally.</p>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="features" id="faq">
+    <div class="container">
+      <h2>FAQ</h2>
+      <div class="feat-grid" style="grid-template-columns: 1fr;">
+        <div class="feat">
+          <h3>Is Clif safe?</h3>
+          <p>100% open source. Read every line on <a href="https://github.com/DLhugly/Clif" style="color: var(--accent);">GitHub</a>. No telemetry, no network calls unless you enable AI. The <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px;">xattr</code> command just removes Apple's download flag — it doesn't disable any security.</p>
+        </div>
+        <div class="feat">
+          <h3>Why isn't it signed?</h3>
+          <p>Apple charges $99/year for a Developer certificate. Clif is free and open source — proper code signing + notarization is on the roadmap.</p>
+        </div>
+        <div class="feat">
+          <h3>Does it work offline?</h3>
+          <p>Yes. AI features are opt-in. Without API keys, Clif is a fully offline editor with terminal and git. Zero network calls.</p>
         </div>
       </div>
     </div>
