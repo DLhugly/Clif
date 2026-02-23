@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/DLhugly/Clif/compare/v1.1.0...v1.2.0) (2026-02-23)
+
+
+### Features
+
+* auto-update README download links on each release ([eb952e3](https://github.com/DLhugly/Clif/commit/eb952e36f8a906f8fe044842b35f40164424b697))
+
 # [1.1.0](https://github.com/DLhugly/Clif/compare/v1.0.0...v1.1.0) (2026-02-23)
 
 
