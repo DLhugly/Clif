@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/DLhugly/Clif/compare/v1.0.0...v1.1.0) (2026-02-23)
+
+
+### Features
+
+* rename AgentBase to Clif across all files ([baf872e](https://github.com/DLhugly/Clif/commit/baf872e3653e5ac639a32a40687b5ccc80e38ae5))
+
 # 1.0.0 (2026-02-23)
 
 
