@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="SplashScreen.png" alt="Clif" width="800" />
+  <img src="Clif.gif" alt="Clif" width="800" />
 </p>
 
 <h1 align="center">Clif</h1>
