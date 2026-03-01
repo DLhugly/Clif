@@ -1,15 +1,10 @@
 <p align="center">
-  <img src="SplashScreen.png" alt="Clif-Code" width="800" />
+  <img src="logo.svg" alt="ClifCode" width="560" />
 </p>
 
-<pre align="center">
-   _____ _ _  __ _____          _
-  / ____| (_)/ _/ ____|        | |
- | |    | |_| || |     ___   __| | ___
- | |    | | |  _| |    / _ \ / _` |/ _ \
- | |____| | | | | |___| (_) | (_| |  __/
-  \_____|_|_|_|  \_____\___/ \__,_|\___|
-</pre>
+<p align="center">
+  <img src="SplashScreen.png" alt="Clif-Code" width="800" />
+</p>
 
 <h3 align="center">Two tools. One mission. Ship faster.</h3>
 

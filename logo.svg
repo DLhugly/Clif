@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 220" fill="none">
+  <rect width="600" height="220" rx="12" fill="#0d1117"/>
+  <text font-family="'JetBrains Mono','Fira Code','SF Mono','Cascadia Code',Consolas,monospace" font-weight="bold" font-size="26" xml:space="preserve">
+    <tspan x="60" y="52"  fill="#00afff">   _____ _ _  __ _____          _      </tspan>
+    <tspan x="60" y="80"  fill="#00d7d7">  / ____| (_)/ _/ ____|        | |     </tspan>
+    <tspan x="60" y="108" fill="#00d7af"> | |    | |_| || |     ___   __| | ___ </tspan>
+    <tspan x="60" y="136" fill="#00d787"> | |    | | |  _| |    / _ \ / _` |/ _ \</tspan>
+    <tspan x="60" y="164" fill="#5fff5f"> | |____| | | | | |___| (_) | (_| |  __/</tspan>
+    <tspan x="60" y="192" fill="#00d787">  \_____|_|_|_|  \_____\___/ \__,_|\___|</tspan>
+  </text>
+</svg>
