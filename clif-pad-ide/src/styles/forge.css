@@ -1,0 +1,341 @@
+/* ─── ClifForge — Spatial Canvas Styles ─── */
+
+.forge-canvas-root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--forge-bg, #06060b);
+  user-select: none;
+}
+
+/* The infinite plane that gets translated/scaled */
+.forge-world {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+/* Subtle dot grid on the background */
+.forge-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--accent-primary) 12%, transparent) 1px,
+    transparent 1px
+  );
+  background-size: 40px 40px;
+  opacity: 0.5;
+  transition: opacity 0.3s;
+}
+
+/* ─── Cards ─── */
+
+.forge-card {
+  position: absolute;
+  min-width: 240px;
+  max-width: 560px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-surface) 85%, transparent);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  border: 1px solid color-mix(in srgb, var(--border-default) 60%, transparent);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.3),
+    0 0 0 0.5px color-mix(in srgb, var(--accent-primary) 8%, transparent);
+  transition: box-shadow 0.25s, border-color 0.25s;
+  overflow: hidden;
+}
+
+.forge-card:hover {
+  border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+  box-shadow:
+    0 8px 40px rgba(0, 0, 0, 0.4),
+    0 0 0 1px color-mix(in srgb, var(--accent-primary) 15%, transparent);
+}
+
+.forge-card.is-streaming {
+  border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.3),
+    0 0 30px color-mix(in srgb, var(--accent-primary) 15%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--accent-primary) 30%, transparent);
+  animation: forge-pulse 2s ease-in-out infinite;
+}
+
+.forge-card.is-dragging {
+  box-shadow:
+    0 16px 64px rgba(0, 0, 0, 0.5),
+    0 0 0 2px var(--accent-primary);
+  z-index: 1000;
+  transition: box-shadow 0.1s;
+}
+
+.forge-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-muted) 50%, transparent);
+  cursor: grab;
+  user-select: none;
+}
+
+.forge-card-header:active {
+  cursor: grabbing;
+}
+
+.forge-card-body {
+  padding: 12px;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.forge-card-body canvas {
+  display: block;
+}
+
+/* Role-specific card accents */
+.forge-card[data-role="user"] {
+  border-left: 3px solid var(--accent-primary);
+}
+
+.forge-card[data-role="assistant"] {
+  border-left: 3px solid var(--accent-green, #3fb950);
+}
+
+.forge-card[data-role="tool_call"],
+.forge-card[data-role="tool_result"] {
+  border-left: 3px solid var(--accent-yellow, #d29922);
+}
+
+.forge-card[data-role="system"] {
+  border-left: 3px solid var(--accent-red, #f85149);
+}
+
+/* ─── Pretext Canvas Layer ─── */
+
+.forge-pretext-canvas {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ─── Toolbar ─── */
+
+.forge-toolbar {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-surface) 80%, transparent);
+  backdrop-filter: blur(20px) saturate(1.3);
+  -webkit-backdrop-filter: blur(20px) saturate(1.3);
+  border: 1px solid color-mix(in srgb, var(--border-default) 50%, transparent);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+  user-select: none;
+}
+
+.forge-toolbar button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.forge-toolbar button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.forge-toolbar button.active {
+  background: color-mix(in srgb, var(--accent-primary) 15%, transparent);
+  color: var(--accent-primary);
+}
+
+.forge-toolbar .divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border-muted);
+}
+
+.forge-zoom-display {
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 40px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Minimap ─── */
+
+.forge-minimap {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  width: 160px;
+  height: 100px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-surface) 70%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border-muted);
+  overflow: hidden;
+  z-index: 100;
+  pointer-events: auto;
+}
+
+.forge-minimap-viewport {
+  position: absolute;
+  border: 1.5px solid var(--accent-primary);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+}
+
+.forge-minimap-dot {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+/* ─── Connection Lines between related cards ─── */
+
+.forge-connections {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.forge-connections line {
+  stroke: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+/* ─── Animations ─── */
+
+@keyframes forge-pulse {
+  0%, 100% {
+    box-shadow:
+      0 4px 24px rgba(0, 0, 0, 0.3),
+      0 0 30px color-mix(in srgb, var(--accent-primary) 10%, transparent),
+      0 0 0 1px color-mix(in srgb, var(--accent-primary) 30%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 4px 24px rgba(0, 0, 0, 0.3),
+      0 0 50px color-mix(in srgb, var(--accent-primary) 20%, transparent),
+      0 0 0 1px color-mix(in srgb, var(--accent-primary) 50%, transparent);
+  }
+}
+
+@keyframes forge-card-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.92) translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.forge-card-enter {
+  animation: forge-card-enter 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* ─── Input Bar at Bottom ─── */
+
+.forge-input-bar {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(640px, calc(100% - 48px));
+  padding: 8px 12px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-surface) 85%, transparent);
+  backdrop-filter: blur(24px) saturate(1.4);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  border: 1px solid color-mix(in srgb, var(--border-default) 60%, transparent);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.4);
+  z-index: 100;
+}
+
+.forge-input-bar:focus-within {
+  border-color: var(--accent-primary);
+  box-shadow:
+    0 8px 40px rgba(0, 0, 0, 0.4),
+    0 0 0 1px color-mix(in srgb, var(--accent-primary) 30%, transparent);
+}
+
+.forge-input-bar textarea {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font-sans);
+  resize: none;
+  line-height: 1.5;
+  max-height: 120px;
+}
+
+.forge-input-bar textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.forge-input-bar button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent-primary);
+  color: var(--accent-text);
+  cursor: pointer;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+
+.forge-input-bar button:hover {
+  opacity: 0.85;
+}
+
+.forge-input-bar button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

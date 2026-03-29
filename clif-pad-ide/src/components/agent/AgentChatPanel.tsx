@@ -19,7 +19,7 @@ import { activeFile, projectRoot, fileTree } from "../../stores/fileStore";
 import type { FileEntry } from "../../types/files";
 import { currentBranch } from "../../stores/gitStore";
 import { settings, updateSettings } from "../../stores/settingsStore";
-import { fontSize } from "../../stores/uiStore";
+import { fontSize, forgeMode, toggleForgeMode } from "../../stores/uiStore";
 import { getApiKey, setApiKey as saveApiKey, agentApproveCommand, clifProjectInitialized, clifReadContext, clifInitProject, getModels } from "../../lib/tauri";
 import ChatMessage from "./ChatMessage";
 import ContextChip from "./ContextChip";
@@ -918,6 +918,27 @@ const AgentChatPanel: Component = () => {
             </Show>
           </button>
         </Show>
+
+        {/* Forge Mode toggle */}
+        <button
+          class="flex items-center justify-center shrink-0"
+          style={{
+            width: "28px", height: "28px",
+            color: forgeMode() ? "#00ffaa" : "var(--text-muted)",
+            background: forgeMode() ? "rgba(0,255,170,0.1)" : "transparent",
+            border: "none", cursor: "pointer", "font-size": "13px",
+            "border-radius": "4px",
+            transition: "all 0.2s",
+          }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = forgeMode() ? "rgba(0,255,170,0.15)" : "var(--bg-hover)"; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = forgeMode() ? "rgba(0,255,170,0.1)" : "transparent"; }}
+          onClick={toggleForgeMode}
+          title={forgeMode() ? "Exit Forge Mode (back to IDE)" : "Enter ClifForge — spatial AI canvas"}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+          </svg>
+        </button>
       </div>
 
       {/* Header row 2: provider + model selectors (always visible) */}

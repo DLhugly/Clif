@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./forge.css";
 
 @layer base {
   html, :root {
