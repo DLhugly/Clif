@@ -24,6 +24,7 @@ interface ForgeCardProps {
   isBeingDragged: boolean;
   zoom: number;
   onDragStart: (id: string, e: PointerEvent) => void;
+  onBranch?: (id: string) => void;
   onResize?: (id: string, width: number) => void;
 }
 
@@ -46,6 +47,7 @@ const roleLabels: Record<string, string> = {
 
 const ForgeCard: Component<ForgeCardProps> = (props) => {
   const [isResizing, setIsResizing] = createSignal(false);
+  const [showActions, setShowActions] = createSignal(false);
 
   const renderContent = () => {
     const node = props.node;
@@ -113,6 +115,7 @@ const ForgeCard: Component<ForgeCardProps> = (props) => {
       class={`forge-card forge-card-enter ${props.node.isStreaming ? "is-streaming" : ""}`}
       data-role={props.node.role || props.node.type}
       data-type={props.node.type}
+      data-node-id={props.node.id}
       classList={{
         "is-dragging": props.isBeingDragged,
         "is-code": props.node.type === "code",
@@ -124,6 +127,8 @@ const ForgeCard: Component<ForgeCardProps> = (props) => {
         top: `${props.node.y}px`,
         width: `${props.node.width}px`,
       }}
+      onPointerEnter={() => setShowActions(true)}
+      onPointerLeave={() => setShowActions(false)}
     >
       {/* Header — drag handle */}
       <div
@@ -164,6 +169,24 @@ const ForgeCard: Component<ForgeCardProps> = (props) => {
           }}>
             {props.node.language}
           </span>
+        </Show>
+
+        {/* Branch button — appears on hover */}
+        <Show when={showActions() && props.onBranch && props.node.role === 'assistant'}>
+          <button
+            class="forge-branch-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              props.onBranch?.(props.node.id);
+            }}
+            title="Branch conversation from here"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M5 6v6m0-6l3-3m-3 3l-3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M11 10v6m0-6l3-3m-3 3l-3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Branch
+          </button>
         </Show>
       </div>
 

@@ -23,6 +23,9 @@ interface ForgeNode {
   language?: string;
   isStreaming?: boolean;
   timestamp: number;
+  branchId?: string;      // Which branch this node belongs to
+  branchFrom?: string;     // Node ID this branch spawned from
+  parentId?: string;       // Parent node in the conversation flow
 }
 
 interface Point {
@@ -56,6 +59,7 @@ export default function ForgeCanvas() {
   const [panOrigin, setPanOrigin] = createSignal<Point>({ x: 0, y: 0 });
   const [dragId, setDragId] = createSignal<string | null>(null);
   const [dragOffset, setDragOffset] = createSignal<Point>({ x: 0, y: 0 });
+  const [spaceHeld, setSpaceHeld] = createSignal(false); // Space = pan mode like Figma
 
   // Pretext canvas for text measurement
   const [measureCanvas, setMeasureCanvas] = createSignal<HTMLCanvasElement>();
@@ -264,6 +268,72 @@ export default function ForgeCanvas() {
     }
   });
 
+  // ─── Conversation Branching ──────────────────────────────────────────────────
+  // The killer Minority Report feature: drag a conversation in a new direction!
+
+  const [branches, setBranches] = createSignal<Map<string, string[]>>(new Map()); // nodeId -> branchIds
+  const [activeBranch, setActiveBranch] = createSignal<string | null>(null);
+
+  /** Create a branch from a specific node - places new card to the right */
+  const createBranch = (fromNodeId: string) => {
+    const sourceNode = nodes().find(n => n.id === fromNodeId);
+    if (!sourceNode) return;
+
+    const branchId = `branch-${Date.now()}`;
+    const newNode: ForgeNode = {
+      id: `${branchId}-prompt`,
+      type: 'text',
+      x: sourceNode.x + sourceNode.width + 100, // Offset to the right
+      y: sourceNode.y,
+      width: DEFAULT_CARD_WIDTH,
+      height: 80,
+      content: '📝 Continue from here… (edit and press Enter)',
+      role: 'user',
+      timestamp: Date.now(),
+      branchId,
+      branchFrom: fromNodeId,
+    };
+
+    setNodes(prev => [...prev, newNode]);
+
+    // Track branch relationship
+    setBranches(prev => {
+      const next = new Map(prev);
+      const existing = next.get(fromNodeId) || [];
+      next.set(fromNodeId, [...existing, branchId]);
+      return next;
+    });
+
+    // Focus the new card for immediate editing
+    setTimeout(() => {
+      const textarea = document.querySelector(`[data-node-id="${newNode.id}"] textarea`) as HTMLTextAreaElement;
+      textarea?.focus();
+      textarea?.select();
+    }, 100);
+  };
+
+  // ─── Keyboard handlers (Space to pan, Delete to remove) ─────────────────────
+
+  onMount(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !e.repeat && document.activeElement?.tagName !== 'TEXTAREA' && document.activeElement?.tagName !== 'INPUT') {
+        setSpaceHeld(true);
+        e.preventDefault(); // Prevent page scroll
+      }
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        setSpaceHeld(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    onCleanup(() => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    });
+  });
+
   // ─── Pointer event handlers (pan & drag) ─────────────────────────────────
 
   const screenToCanvas = (screenX: number, screenY: number): Point => {
@@ -276,8 +346,8 @@ export default function ForgeCanvas() {
   };
 
   const handlePointerDown = (e: PointerEvent) => {
-    // Middle click or space+click = pan
-    if (e.button === 1 || (e.button === 0 && e.altKey)) {
+    // Middle click, Alt+click, or Space+click = pan (like Figma/Miro)
+    if (e.button === 1 || (e.button === 0 && e.altKey) || (e.button === 0 && spaceHeld())) {
       setIsPanning(true);
       setPanStart({ x: e.clientX, y: e.clientY });
       setPanOrigin({ ...pan() });
@@ -492,6 +562,28 @@ export default function ForgeCanvas() {
     );
   };
 
+  // ─── Double-click to create freeform notes ────────────────────────────────
+
+  const handleDoubleClick = (e: MouseEvent) => {
+    // Only on empty canvas, not on cards
+    if ((e.target as HTMLElement).closest('.forge-card')) return;
+    
+    const canvasPos = screenToCanvas(e.clientX, e.clientY);
+    const id = `note-${Date.now()}`;
+    const newNote: ForgeNode = {
+      id,
+      type: 'text',
+      x: canvasPos.x - DEFAULT_CARD_WIDTH / 2,
+      y: canvasPos.y - 30,
+      width: DEFAULT_CARD_WIDTH,
+      height: 100,
+      content: '✨ New note — double-click to edit',
+      role: 'user',
+      timestamp: Date.now(),
+    };
+    setNodes(prev => [...prev, newNote]);
+  };
+
   // ─── JSX Return ──────────────────────────────────────────────────────────
 
   return (
@@ -502,7 +594,8 @@ export default function ForgeCanvas() {
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onWheel={handleWheel}
-      style={{ cursor: isPanning() ? 'grabbing' : dragId() ? 'move' : 'default' }}
+      onDblClick={handleDoubleClick}
+      style={{ cursor: spaceHeld() ? 'grab' : isPanning() ? 'grabbing' : dragId() ? 'move' : 'default' }}
     >
       {/* Grid background layer */}
       <div
@@ -528,6 +621,7 @@ export default function ForgeCanvas() {
               isBeingDragged={dragId() === node.id}
               zoom={zoom()}
               onDragStart={startDrag}
+              onBranch={createBranch}
               onResize={(id, width) => {
                 setNodes(prev => prev.map(n =>
                   n.id === id ? { ...n, width, height: measureTextHeight(n.content, width, n.type === 'code') } : n
@@ -550,10 +644,13 @@ export default function ForgeCanvas() {
             overflow: 'visible',
           }}
         >
+          {/* Main sequential connections */}
           <For each={nodes()}>
             {(node, i) => {
               const next = nodes()[i() + 1];
               if (!next) return null;
+              // Skip if next is a branch (has branchFrom)
+              if (next.branchFrom) return null;
               const fromX = node.x + node.width / 2;
               const fromY = node.y + node.height;
               const toX = next.x + next.width / 2;
@@ -566,6 +663,28 @@ export default function ForgeCanvas() {
                   stroke-width="1.5"
                   fill="none"
                   stroke-dasharray={node.isStreaming ? '6 4' : 'none'}
+                />
+              );
+            }}
+          </For>
+          {/* Branch connections (horizontal lines to branched nodes) */}
+          <For each={nodes()}>
+            {(node) => {
+              if (!node.branchFrom) return null;
+              const sourceNode = nodes().find(n => n.id === node.branchFrom);
+              if (!sourceNode) return null;
+              const fromX = sourceNode.x + sourceNode.width;
+              const fromY = sourceNode.y + sourceNode.height / 2;
+              const toX = node.x;
+              const toY = node.y + node.height / 2;
+              const midX = (fromX + toX) / 2;
+              return (
+                <path
+                  d={`M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`}
+                  stroke="#6366f155"
+                  stroke-width="2"
+                  fill="none"
+                  stroke-dasharray="8 4"
                 />
               );
             }}
@@ -645,7 +764,7 @@ export default function ForgeCanvas() {
           <h2>ClifForge</h2>
           <p>Spatial AI workspace — drag, zoom, and explore.</p>
           <p class="forge-empty-hint">
-            Alt+Click to pan · Scroll to pan · Ctrl+Scroll to zoom · Esc to exit
+            Space+Drag to pan · Alt+Drag to pan · Scroll to zoom · Double-click to add note · Esc to exit
           </p>
         </div>
       </Show>
