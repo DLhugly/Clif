@@ -48,6 +48,20 @@ const roleLabels: Record<string, string> = {
 const ForgeCard: Component<ForgeCardProps> = (props) => {
   const [isResizing, setIsResizing] = createSignal(false);
   const [showActions, setShowActions] = createSignal(false);
+  const [isEditing, setIsEditing] = createSignal(false);
+  const [editContent, setEditContent] = createSignal('');
+
+  const startEditing = () => {
+    if (props.node.type === 'text' && props.node.role === 'user') {
+      setEditContent(props.node.content);
+      setIsEditing(true);
+    }
+  };
+
+  const finishEditing = () => {
+    setIsEditing(false);
+    // Could emit onEdit callback here to persist changes
+  };
 
   const renderContent = () => {
     const node = props.node;
@@ -190,15 +204,46 @@ const ForgeCard: Component<ForgeCardProps> = (props) => {
         </Show>
       </div>
 
-      {/* Body — rendered content */}
-      <div
-        class="forge-card-body"
-        innerHTML={renderContent()}
-        style={{
-          "max-height": "400px",
-          "overflow-y": "auto",
-        }}
-      />
+      {/* Body — rendered content or editable textarea */}
+      <Show when={isEditing()} fallback={
+        <div
+          class="forge-card-body"
+          innerHTML={renderContent()}
+          style={{
+            "max-height": "400px",
+            "overflow-y": "auto",
+          }}
+          onDblClick={startEditing}
+        />
+      }>
+        <textarea
+          class="forge-card-edit"
+          value={editContent()}
+          onInput={(e) => setEditContent(e.currentTarget.value)}
+          onBlur={finishEditing}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              setIsEditing(false);
+            } else if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              finishEditing();
+            }
+          }}
+          style={{
+            width: "100%",
+            height: "120px",
+            background: "transparent",
+            border: "none",
+            outline: "none",
+            color: "var(--text-primary)",
+            "font-family": "var(--font-sans)",
+            "font-size": "13px",
+            resize: "none",
+            padding: "12px",
+          }}
+          autofocus
+        />
+      </Show>
 
       {/* Resize handle (right edge) */}
       <div
