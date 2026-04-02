@@ -6,7 +6,7 @@ import RightSidebar from "./components/layout/RightSidebar";
 import AboutModal from "./components/layout/AboutModal";
 import ToastContainer from "./components/layout/ToastContainer";
 import { ResizeHandle } from "./components/ui";
-import { terminalHeight, setTerminalHeight, terminalVisible, sidebarVisible, sidebarWidth, setSidebarWidth, agentWidth, setAgentWidth, agentVisible, setAgentVisible, editorVisible, applyTheme, setUiFontSize, toggleTerminal, toggleSidebar, setShowCommandPalette, clampPanelWidth } from "./stores/uiStore";
+import { terminalHeight, setTerminalHeight, terminalVisible, sidebarVisible, sidebarWidth, setSidebarWidth, agentWidth, setAgentWidth, agentVisible, setAgentVisible, editorVisible, applyTheme, setUiFontSize, toggleTerminal, toggleSidebar, setShowCommandPalette, clampPanelWidth, forgeMode, toggleForgeMode } from "./stores/uiStore";
 import { loadSettings, settings } from "./stores/settingsStore";
 import { registerKeybinding, initKeybindings } from "./lib/keybindings";
 import { saveActiveFile, projectRoot, openProject, openBrowser, togglePreview } from "./stores/fileStore";
@@ -14,10 +14,12 @@ import { initGit } from "./stores/gitStore";
 import { configureMonaco } from "./lib/monaco-setup";
 import { loadGoogleFont, applyUiFont } from "./lib/fonts";
 import { createTerminalTab } from "./stores/terminalStore";
+import { initAgentListeners } from "./stores/agentStore";
 import type { TerminalPanelRef } from "./components/terminal/TerminalPanel";
 
 const TerminalPanel = lazy(() => import("./components/terminal/TerminalPanel"));
 const AgentChatPanel = lazy(() => import("./components/agent/AgentChatPanel"));
+const ForgeCanvas = lazy(() => import("./components/agent/ForgeCanvas"));
 
 const App: Component = () => {
   let terminalRef: TerminalPanelRef | undefined;
@@ -186,8 +188,12 @@ function handleSidebarResize(e: MouseEvent) {
     registerKeybinding("b", ["ctrl"], toggleSidebar, "Toggle sidebar");
     registerKeybinding("p", ["ctrl", "shift"], () => setShowCommandPalette(true), "Command palette");
     registerKeybinding("v", ["ctrl", "shift"], togglePreview, "Toggle markdown preview");
+    registerKeybinding("f", ["ctrl", "shift"], toggleForgeMode, "Toggle ClifForge (spatial canvas)");
 
     initKeybindings();
+
+    // Initialize agent event listeners globally (so they work in both Chat and Forge mode)
+    await initAgentListeners();
 
     // Listen for "About ClifPad" from the system menu
     const { listen } = await import("@tauri-apps/api/event");
@@ -214,86 +220,104 @@ function handleSidebarResize(e: MouseEvent) {
       {/* Top Bar */}
       <TopBar onOpenFolder={handleOpenFolder} onOpenBrowser={openBrowser} />
 
-      {/* Main content: Editor (with terminal) + Sidebar + Agent */}
+      {/* Main content: Editor (with terminal) + Sidebar + Agent — OR ForgeCanvas */}
       <div class="flex flex-1 min-h-0 w-full max-w-full overflow-hidden">
-        {/* Editor Area (with terminal at bottom) */}
-        <div class="flex flex-col flex-1 min-h-0 min-w-0">
-          {/* Editor Panel (center) */}
-          <Show when={editorVisible()}>
-            <div class="flex-1 min-w-0 min-h-0">
-              <EditorArea />
-            </div>
-          </Show>
-
-          {/* Bottom Panel: Terminal (only under editor) */}
-          <Show when={terminalVisible()}>
-            <ResizeHandle direction="row" isDragging={isDraggingTerminal()} onMouseDown={handleTerminalResize} />
-
-            <div
-              style={{ height: `${terminalHeight()}%` }}
-              class="min-h-0 shrink-0"
-            >
-              <Suspense
-                fallback={
-                  <div
-                    class="flex items-center justify-center h-full"
-                    style={{ color: "var(--text-muted)", background: "var(--bg-base)" }}
-                  >
-                    <span class="text-sm">Starting terminal...</span>
-                  </div>
-                }
-              >
-                <TerminalPanel
-                ref={(r) => (terminalRef = r)}
-                workingDir={projectRoot() || undefined}
-                onLaunchClifCode={handleLaunchClifCode}
-                onLaunchClaude={handleLaunchClaude}
-              />
-              </Suspense>
-            </div>
-          </Show>
-        </div>
-
-        {/* Right Panel: Sidebar */}
-        <Show when={sidebarVisible()}>
-          <ResizeHandle direction="col" isDragging={isDraggingSidebar()} onMouseDown={handleSidebarResize} />
-
-          <div
-            ref={sidebarContainerRef}
-            style={{ width: `${sidebarWidth()}px` }}
-            class="h-full shrink-0"
-          >
-            <RightSidebar onOpenFolder={handleOpenFolder} onOpenRecent={async (path) => {
-              await openProject(path);
-              if (terminalRef) {
-                terminalRef.sendCommand(`cd ${JSON.stringify(path)}\n`);
-              }
-              await initGit();
-            }} />
-          </div>
-        </Show>
-
-        {/* Agent Panel (independent, on the far right) */}
-        <Show when={agentVisible()}>
-          <ResizeHandle direction="col" isDragging={isDraggingAgent()} onMouseDown={handleAgentResize} />
-
-          <div
-            style={{ width: `${agentWidth()}px` }}
-            class="h-full shrink-0"
-          >
-            <Suspense
-              fallback={
-                <div
-                  class="flex items-center justify-center h-full"
-                  style={{ color: "var(--text-muted)", background: "var(--bg-surface)" }}
-                >
-                  <span class="text-sm">Loading agent...</span>
+        <Show when={forgeMode()} fallback={
+          <>
+            {/* Editor Area (with terminal at bottom) */}
+            <div class="flex flex-col flex-1 min-h-0 min-w-0">
+              {/* Editor Panel (center) */}
+              <Show when={editorVisible()}>
+                <div class="flex-1 min-w-0 min-h-0">
+                  <EditorArea />
                 </div>
-              }
-            >
-              <AgentChatPanel />
-            </Suspense>
-          </div>
+              </Show>
+
+              {/* Bottom Panel: Terminal (only under editor) */}
+              <Show when={terminalVisible()}>
+                <ResizeHandle direction="row" isDragging={isDraggingTerminal()} onMouseDown={handleTerminalResize} />
+
+                <div
+                  style={{ height: `${terminalHeight()}%` }}
+                  class="min-h-0 shrink-0"
+                >
+                  <Suspense
+                    fallback={
+                      <div
+                        class="flex items-center justify-center h-full"
+                        style={{ color: "var(--text-muted)", background: "var(--bg-base)" }}
+                      >
+                        <span class="text-sm">Starting terminal...</span>
+                      </div>
+                    }
+                  >
+                    <TerminalPanel
+                      ref={(r) => (terminalRef = r)}
+                      workingDir={projectRoot() || undefined}
+                      onLaunchClifCode={handleLaunchClifCode}
+                      onLaunchClaude={handleLaunchClaude}
+                    />
+                  </Suspense>
+                </div>
+              </Show>
+            </div>
+
+            {/* Right Panel: Sidebar */}
+            <Show when={sidebarVisible()}>
+              <ResizeHandle direction="col" isDragging={isDraggingSidebar()} onMouseDown={handleSidebarResize} />
+
+              <div
+                ref={sidebarContainerRef}
+                style={{ width: `${sidebarWidth()}px` }}
+                class="h-full shrink-0"
+              >
+                <RightSidebar onOpenFolder={handleOpenFolder} onOpenRecent={async (path) => {
+                  await openProject(path);
+                  if (terminalRef) {
+                    terminalRef.sendCommand(`cd ${JSON.stringify(path)}\n`);
+                  }
+                  await initGit();
+                }} />
+              </div>
+            </Show>
+
+            {/* Agent Panel (independent, on the far right) */}
+            <Show when={agentVisible()}>
+              <ResizeHandle direction="col" isDragging={isDraggingAgent()} onMouseDown={handleAgentResize} />
+
+              <div
+                style={{ width: `${agentWidth()}px` }}
+                class="h-full shrink-0"
+              >
+                <Suspense
+                  fallback={
+                    <div
+                      class="flex items-center justify-center h-full"
+                      style={{ color: "var(--text-muted)", background: "var(--bg-surface)" }}
+                    >
+                      <span class="text-sm">Loading agent...</span>
+                    </div>
+                  }
+                >
+                  <AgentChatPanel />
+                </Suspense>
+              </div>
+            </Show>
+          </>
+        }>
+          {/* FORGE MODE: Full-screen spatial canvas replaces everything */}
+          <Suspense
+            fallback={
+              <div
+                class="flex items-center justify-center flex-1"
+                style={{ color: "var(--text-muted)", background: "#0a0a0f" }}
+              >
+                <span class="text-sm">Igniting ClifForge...</span>
+              </div>
+            }
+          >
+            <ForgeCanvas />
+          </Suspense>
         </Show>
       </div>
 

@@ -70,6 +70,13 @@ const [showCommandPalette, setShowCommandPalette] = createSignal(false);
 const [devDrawerOpen, setDevDrawerOpen] = createSignal(false);
 const [devDrawerHeight, setDevDrawerHeight] = createSignal(50);
 
+// ClifForge mode — spatial canvas replaces the entire editor area
+const [forgeMode, setForgeMode] = createSignal(false);
+
+function toggleForgeMode() {
+  setForgeMode(prev => !prev);
+}
+
 // Derived visibility signals for backward compatibility
 const terminalVisible = () => visiblePanels().has("terminal");
 const agentVisible = () => visiblePanels().has("agent");
@@ -205,4 +212,9 @@ export {
   setDevDrawerOpen,
   devDrawerHeight,
   setDevDrawerHeight,
+
+  // ClifForge
+  forgeMode,
+  setForgeMode,
+  toggleForgeMode,
 };
