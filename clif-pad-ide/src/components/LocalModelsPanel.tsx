@@ -5,7 +5,10 @@ import {
   loading,
   error,
   progress,
+  resolved,
+  verifying,
   refresh,
+  verifyOnHf,
   download,
   remove,
   setActive,
@@ -48,6 +51,13 @@ const ModelCard: Component<{ entry: CatalogEntry }> = (props) => {
   const pct = () => progress()[e().id];
   const isDownloading = () => pct() !== undefined;
   const fitColor = () => FIT_COLOR[e().fit];
+  // Exact size from HF once verified; otherwise the catalog estimate.
+  const sizeLabel = () => {
+    const r = resolved()[e().id];
+    return r
+      ? `${(r.size_bytes / 1e9).toFixed(1)}GB`
+      : `~${e().size_gb}GB`;
+  };
 
   return (
     <div
@@ -74,7 +84,7 @@ const ModelCard: Component<{ entry: CatalogEntry }> = (props) => {
             {e().name}
           </span>
           <span style={{ "font-size": "11px", color: "var(--text-muted)" }}>
-            {e().params_b}B · {e().quant} · ~{e().size_gb}GB · {Math.round(e().context / 1024)}K ctx
+            {e().params_b}B · {e().quant} · {sizeLabel()} · {Math.round(e().context / 1024)}K ctx
           </span>
         </div>
         <Badge color={fitColor()}>{e().fit_label}</Badge>
@@ -88,6 +98,9 @@ const ModelCard: Component<{ entry: CatalogEntry }> = (props) => {
         </Show>
         <Show when={e().downloaded && !e().active}>
           <Badge color="#22c55e">Downloaded</Badge>
+        </Show>
+        <Show when={resolved()[e().id]}>
+          <Badge color="#38bdf8">✓ on HF</Badge>
         </Show>
       </div>
 
@@ -193,21 +206,40 @@ const LocalModelsPanel: Component = () => {
           <span style={{ "font-size": "13px", "font-weight": "700", color: "var(--text-primary)" }}>
             Local Models
           </span>
-          <button
-            class="rounded-md transition-colors"
-            onClick={() => void refresh()}
-            title="Re-detect hardware and refresh"
-            style={{
-              "font-size": "11px",
-              padding: "3px 9px",
-              color: "var(--text-muted)",
-              background: "var(--bg-hover)",
-              border: "1px solid var(--border-default)",
-              cursor: "pointer",
-            }}
-          >
-            Refresh
-          </button>
+          <div class="flex items-center gap-1.5">
+            <button
+              class="rounded-md transition-colors"
+              onClick={() => void verifyOnHf()}
+              disabled={verifying()}
+              title="Resolve exact filenames + sizes from the Hugging Face API"
+              style={{
+                "font-size": "11px",
+                padding: "3px 9px",
+                color: "var(--accent-primary)",
+                background: "color-mix(in srgb, var(--accent-primary) 12%, transparent)",
+                border: "1px solid color-mix(in srgb, var(--accent-primary) 32%, transparent)",
+                cursor: verifying() ? "wait" : "pointer",
+                opacity: verifying() ? "0.6" : "1",
+              }}
+            >
+              {verifying() ? "Verifying…" : "Verify on HF"}
+            </button>
+            <button
+              class="rounded-md transition-colors"
+              onClick={() => void refresh()}
+              title="Re-detect hardware and refresh"
+              style={{
+                "font-size": "11px",
+                padding: "3px 9px",
+                color: "var(--text-muted)",
+                background: "var(--bg-hover)",
+                border: "1px solid var(--border-default)",
+                cursor: "pointer",
+              }}
+            >
+              Refresh
+            </button>
+          </div>
         </div>
         <span style={{ "font-size": "11px", color: "var(--text-muted)" }}>
           {hardware()?.summary ?? "Detecting hardware…"}

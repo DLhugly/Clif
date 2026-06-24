@@ -47,9 +47,24 @@ export interface DownloadedModel {
 
 export interface DownloadProgress {
   id: string;
+  filename: string | null;
   downloaded_bytes: number;
   total_bytes: number;
   percent: number;
   done: boolean;
   error: string | null;
+}
+
+// Exact file resolved from the Hugging Face API (no guessing).
+export interface ResolvedModel {
+  id: string;
+  repo: string;
+  filename: string;
+  size_bytes: number;
+}
+
+export interface HfModelSummary {
+  id: string;
+  downloads: number;
+  likes: number;
 }

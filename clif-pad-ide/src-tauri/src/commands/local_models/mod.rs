@@ -1,23 +1,19 @@
 //! Local Models — hardware-aware discovery, download, and management of
 //! on-device coding models. (PRD: docs/PRD-local-models-tab.md, Phase 1.)
 //!
-//! v1 surface:
-//!   - detect hardware                (`local_detect_hardware`)
-//!   - catalog with per-model fit     (`local_models_catalog`)
-//!   - list downloaded                (`local_models_list`)
-//!   - download with progress events  (`local_model_download`)
-//!   - delete / set-active / active   (`local_model_delete` / `_set_active` / `_active`)
-//!
-//! Inference itself goes through `engine::LocalEngine` (stubbed in v1).
+//! Filenames + sizes are resolved from the Hugging Face API (see `hf.rs`), never
+//! guessed. Inference itself goes through `engine::LocalEngine` (stubbed in v1).
 
 mod catalog;
 mod download;
 mod engine;
 mod hardware;
+mod hf;
 mod store;
 
 use catalog::CatalogEntry;
 use hardware::HardwareInfo;
+use hf::HfModelSummary;
 use serde::Serialize;
 use tauri::AppHandle;
 
@@ -29,6 +25,15 @@ pub struct DownloadedModel {
     pub size_bytes: u64,
     pub path: String,
     pub active: bool,
+}
+
+/// Resolved HF file for a catalog model (exact filename + size — no guessing).
+#[derive(Serialize)]
+pub struct ResolvedModel {
+    pub id: String,
+    pub repo: String,
+    pub filename: String,
+    pub size_bytes: u64,
 }
 
 #[tauri::command]
@@ -46,7 +51,7 @@ pub fn local_models_catalog() -> Result<Vec<CatalogEntry>, String> {
     let mut entries: Vec<CatalogEntry> = catalog::all()
         .into_iter()
         .map(|model| {
-            let downloaded = store::model_file_path(&model.id, &model.file).exists();
+            let downloaded = store::is_downloaded(&model.id);
             let is_active = active.as_deref() == Some(model.id.as_str());
             let (fit, fit_label) = catalog::fit_for(model.size_gb, hw.total_ram_gb);
             CatalogEntry {
@@ -78,13 +83,17 @@ pub fn local_models_list() -> Result<Vec<DownloadedModel>, String> {
     let mut out = Vec::new();
 
     for model in catalog::all() {
-        let path = store::model_file_path(&model.id, &model.file);
-        if let Ok(meta) = std::fs::metadata(&path) {
+        if let Some(path) = store::downloaded_file(&model.id) {
+            let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let file = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
             out.push(DownloadedModel {
                 id: model.id.clone(),
                 name: model.name.clone(),
-                file: model.file.clone(),
-                size_bytes: meta.len(),
+                file,
+                size_bytes,
                 path: path.to_string_lossy().to_string(),
                 active: active.as_deref() == Some(model.id.as_str()),
             });
@@ -93,13 +102,40 @@ pub fn local_models_list() -> Result<Vec<DownloadedModel>, String> {
     Ok(out)
 }
 
+/// Resolve a catalog model's exact GGUF filename + size from the HF API,
+/// without downloading. Used by the UI to verify availability + show real size.
+#[tauri::command]
+pub async fn local_model_resolve(id: String, token: Option<String>) -> Result<ResolvedModel, String> {
+    let model = catalog::find(&id).ok_or_else(|| format!("unknown model: {id}"))?;
+    let file = hf::resolve_gguf(&model.hf_repo, &model.quant, &token).await?;
+    Ok(ResolvedModel {
+        id: model.id,
+        repo: model.hf_repo,
+        filename: file.filename,
+        size_bytes: file.size_bytes,
+    })
+}
+
+/// Search GGUF models on the Hugging Face Hub (for the model browser).
+#[tauri::command]
+pub async fn local_models_search(
+    query: String,
+    token: Option<String>,
+) -> Result<Vec<HfModelSummary>, String> {
+    hf::search_models(&query, &token).await
+}
+
 /// Kick off a download. Returns immediately; progress arrives via the
 /// `local_model_download_progress` event stream.
 #[tauri::command]
-pub async fn local_model_download(app: AppHandle, id: String) -> Result<(), String> {
+pub async fn local_model_download(
+    app: AppHandle,
+    id: String,
+    token: Option<String>,
+) -> Result<(), String> {
     let model = catalog::find(&id).ok_or_else(|| format!("unknown model: {id}"))?;
     tokio::spawn(async move {
-        download::run(app, model).await;
+        download::run(app, model, token).await;
     });
     Ok(())
 }
@@ -122,8 +158,8 @@ pub fn local_model_delete(id: String) -> Result<(), String> {
 /// Mark a downloaded model as the active local model.
 #[tauri::command]
 pub fn local_model_set_active(id: String) -> Result<(), String> {
-    let model = catalog::find(&id).ok_or_else(|| format!("unknown model: {id}"))?;
-    if !store::model_file_path(&model.id, &model.file).exists() {
+    catalog::find(&id).ok_or_else(|| format!("unknown model: {id}"))?;
+    if !store::is_downloaded(&id) {
         return Err(format!("model '{id}' is not downloaded yet"));
     }
     store::write_active(Some(&id))

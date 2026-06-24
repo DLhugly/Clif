@@ -13,11 +13,11 @@ pub struct CatalogModel {
     pub name: String,
     /// Hugging Face repo holding the GGUF, e.g. "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF".
     pub hf_repo: String,
-    /// GGUF filename within the repo.
-    pub file: String,
     pub params_b: f64,
-    /// Approx on-disk size of the weight file in GB.
+    /// Approx on-disk size in GB — a pre-download ESTIMATE for fit scoring/UI.
+    /// The exact size is resolved from the HF API at download/verify time.
     pub size_gb: f64,
+    /// Quant preference used to pick the right GGUF from the repo (e.g. "Q4_K_M").
     pub quant: String,
     /// Minimum total system RAM (GB) we'd recommend for this model.
     pub min_ram_gb: f64,
@@ -43,7 +43,6 @@ fn m(
     id: &str,
     name: &str,
     repo: &str,
-    file: &str,
     params_b: f64,
     size_gb: f64,
     quant: &str,
@@ -56,7 +55,6 @@ fn m(
         id: id.into(),
         name: name.into(),
         hf_repo: repo.into(),
-        file: file.into(),
         params_b,
         size_gb,
         quant: quant.into(),
@@ -74,7 +72,6 @@ pub fn all() -> Vec<CatalogModel> {
             "qwen3-coder-30b-a3b",
             "Qwen3-Coder 30B-A3B (MoE)",
             "Qwen/Qwen3-Coder-30B-A3B-Instruct-GGUF",
-            "qwen3-coder-30b-a3b-instruct-q4_k_m.gguf",
             30.0, 17.0, "Q4_K_M", 24.0, 32768,
             "agentic",
             "Default Mac coding model — 30B memory, ~3B active. Fast + strong.",
@@ -82,8 +79,7 @@ pub fn all() -> Vec<CatalogModel> {
         m(
             "devstral-small-2",
             "Devstral Small 2 (24B)",
-            "mistralai/Devstral-Small-2-GGUF",
-            "devstral-small-2-q4_k_m.gguf",
+            "mistralai/Devstral-Small-2507-GGUF",
             24.0, 14.0, "Q4_K_M", 24.0, 32768,
             "agentic",
             "Mistral's agentic coding model. ~68% SWE-bench Verified.",
@@ -92,7 +88,6 @@ pub fn all() -> Vec<CatalogModel> {
             "qwen2.5-coder-32b",
             "Qwen2.5-Coder 32B",
             "Qwen/Qwen2.5-Coder-32B-Instruct-GGUF",
-            "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
             32.0, 19.0, "Q4_K_M", 32.0, 32768,
             "reasoning",
             "Heavy dense reasoning; rivals frontier-cloud on many coding tasks.",
@@ -101,7 +96,6 @@ pub fn all() -> Vec<CatalogModel> {
             "qwen2.5-coder-14b",
             "Qwen2.5-Coder 14B",
             "Qwen/Qwen2.5-Coder-14B-Instruct-GGUF",
-            "qwen2.5-coder-14b-instruct-q4_k_m.gguf",
             14.0, 9.0, "Q4_K_M", 16.0, 32768,
             "general",
             "Strong mid-tier; good balance of quality and footprint.",
@@ -110,7 +104,6 @@ pub fn all() -> Vec<CatalogModel> {
             "qwen2.5-coder-7b",
             "Qwen2.5-Coder 7B",
             "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF",
-            "qwen2.5-coder-7b-instruct-q4_k_m.gguf",
             7.0, 4.5, "Q4_K_M", 16.0, 32768,
             "general",
             "Runs almost anywhere; solid general coding for its size.",
@@ -119,7 +112,6 @@ pub fn all() -> Vec<CatalogModel> {
             "qwen2.5-coder-3b",
             "Qwen2.5-Coder 3B",
             "Qwen/Qwen2.5-Coder-3B-Instruct-GGUF",
-            "qwen2.5-coder-3b-instruct-q4_k_m.gguf",
             3.0, 2.0, "Q4_K_M", 8.0, 32768,
             "autocomplete",
             "Tiny + fast — best for fill-in-middle / autocomplete.",

@@ -2,6 +2,7 @@ import { createSignal } from "solid-js";
 import {
   localDetectHardware,
   localModelsCatalog,
+  localModelResolve,
   localModelDownload,
   localModelDelete,
   localModelSetActive,
@@ -11,6 +12,7 @@ import type {
   HardwareInfo,
   CatalogEntry,
   DownloadProgress,
+  ResolvedModel,
 } from "../types/localModels";
 
 const [hardware, setHardware] = createSignal<HardwareInfo | null>(null);
@@ -20,6 +22,10 @@ const [error, setError] = createSignal<string | null>(null);
 
 // id -> percent (0-100) while a download is in flight
 const [progress, setProgress] = createSignal<Record<string, number>>({});
+
+// id -> resolved HF file (exact filename + real size), once verified
+const [resolved, setResolved] = createSignal<Record<string, ResolvedModel>>({});
+const [verifying, setVerifying] = createSignal(false);
 
 let progressListenerStarted = false;
 
@@ -76,6 +82,30 @@ async function download(id: string) {
   }
 }
 
+/**
+ * Resolve every catalog model against the Hugging Face API to confirm the exact
+ * GGUF file exists and fetch its real size. This is the "don't guess" path —
+ * user-initiated so we don't hammer HF on every panel open.
+ */
+async function verifyOnHf() {
+  setVerifying(true);
+  setError(null);
+  const results: Record<string, ResolvedModel> = { ...resolved() };
+  const failures: string[] = [];
+  for (const entry of catalog()) {
+    try {
+      results[entry.id] = await localModelResolve(entry.id);
+      setResolved({ ...results });
+    } catch (e) {
+      failures.push(entry.name);
+    }
+  }
+  if (failures.length) {
+    setError(`Not found on HF (may be gated or renamed): ${failures.join(", ")}`);
+  }
+  setVerifying(false);
+}
+
 async function remove(id: string) {
   setError(null);
   try {
@@ -102,7 +132,10 @@ export {
   loading,
   error,
   progress,
+  resolved,
+  verifying,
   refresh,
+  verifyOnHf,
   download,
   remove,
   setActive,

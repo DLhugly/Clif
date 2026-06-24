@@ -53,9 +53,28 @@ pub fn model_dir(id: &str) -> PathBuf {
     models_dir().join(sanitize(id))
 }
 
-/// Full path to a model's weight file on disk.
-pub fn model_file_path(id: &str, file: &str) -> PathBuf {
-    model_dir(id).join(sanitize(file))
+/// Target path for a freshly-resolved download (filename comes from the HF API).
+pub fn download_target(id: &str, filename: &str) -> PathBuf {
+    model_dir(id).join(sanitize(filename))
+}
+
+/// The downloaded GGUF for a model, if any. Scans the model dir for a completed
+/// (non-`.part`) `.gguf` file, so we never depend on a guessed filename.
+pub fn downloaded_file(id: &str) -> Option<PathBuf> {
+    let dir = model_dir(id);
+    let entries = std::fs::read_dir(&dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path.file_name()?.to_string_lossy().to_lowercase();
+        if name.ends_with(".gguf") && !name.ends_with(".part") {
+            return Some(path);
+        }
+    }
+    None
+}
+
+pub fn is_downloaded(id: &str) -> bool {
+    downloaded_file(id).is_some()
 }
 
 /// Path to the small JSON marker recording which model is active.

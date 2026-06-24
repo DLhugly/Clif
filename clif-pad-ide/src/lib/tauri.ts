@@ -510,6 +510,8 @@ import type {
   CatalogEntry,
   DownloadedModel,
   DownloadProgress,
+  ResolvedModel,
+  HfModelSummary,
 } from "../types/localModels";
 
 export async function localDetectHardware(): Promise<HardwareInfo> {
@@ -524,8 +526,27 @@ export async function localModelsList(): Promise<DownloadedModel[]> {
   return invoke("local_models_list");
 }
 
-export async function localModelDownload(id: string): Promise<void> {
-  return invoke("local_model_download", { id });
+/** Resolve a catalog model's exact GGUF filename + size from the HF API. */
+export async function localModelResolve(
+  id: string,
+  token?: string | null,
+): Promise<ResolvedModel> {
+  return invoke("local_model_resolve", { id, token: token ?? null });
+}
+
+/** Search GGUF models on the Hugging Face Hub. */
+export async function localModelsSearch(
+  query: string,
+  token?: string | null,
+): Promise<HfModelSummary[]> {
+  return invoke("local_models_search", { query, token: token ?? null });
+}
+
+export async function localModelDownload(
+  id: string,
+  token?: string | null,
+): Promise<void> {
+  return invoke("local_model_download", { id, token: token ?? null });
 }
 
 export async function localModelDelete(id: string): Promise<void> {
