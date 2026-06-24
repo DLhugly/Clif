@@ -35,15 +35,50 @@ Opportunity:
 
 ## 4. Technical Recommendations (Performance + Reliability Focused)
 
+### 4.1 Inference engine — per-platform split (DECIDED)
+
+llama.cpp is **not** the fastest runtime on Apple Silicon — **MLX is, by ~2–3×**
+(e.g. ~130 tok/s vs ~43 tok/s for Qwen3-Coder-30B-A3B on an M4 Pro). But MLX is
+Mac-only. There is no single engine that is both fastest-on-Mac and best
+cross-platform, so we split by platform behind one backend interface:
+
+| Platform        | Engine                              | Why |
+|-----------------|-------------------------------------|-----|
+| **macOS (primary)** | **MLX** via `mlx-rs` (in-process); study/fork **`mlxcel`** | Fastest on Apple Silicon; M5 has MLX-specific Neural Accelerators. `mlxcel` is a Rust-native MLX engine that already wires speculative decoding + prefix caching + KV compression in-process — strong prior art to build on. |
+| **Windows / Linux** | **`llama-cpp-4`** (primary) or **`mistral.rs`** | `llama-cpp-4`: most mature, battle-tested in-process binding. `mistral.rs`: pure-Rust alternative (≈ llama.cpp on Metal, has built-in speculative decoding) if we want one Rust stack and to avoid the C++ dep. |
+
+Both engines run **in-process inside the Clif binary** (no LM Studio / Ollama /
+external server) and sit behind a single `ModelBackend` so the agent harness is
+engine-agnostic.
+
+### 4.2 Supporting crates
+
 | Component              | Recommended Option       | Rationale |
 |------------------------|--------------------------|-----------|
-| **LLM Inference**      | `llama-cpp-4` (primary)  | Best performance + reliability balance. Close to upstream llama.cpp. |
-| **Alternative**        | `mistralrs`              | Pure Rust option if we want to avoid C++ dependency long-term. |
-| **HF Integration**     | `hf-hub`                 | Official, reliable way to download GGUF models. |
+| **HF Integration**     | `hf-hub`                 | Official, reliable way to download GGUF / MLX-format models. |
 | **Hardware Detection** | `sysinfo` + `syspeek`    | Reliable RAM + decent VRAM/GPU detection. |
 | **Coding Benchmarks**  | SWE-bench public JSON    | Use real coding performance data for recommendations. |
+| **Aux models (Rust, in-process)** | `candle`     | Pure-Rust niche: embeddings/reranker for the indexer, draft model for speculative decoding, router/classifier. Not the 30B hot path. |
 
-**Primary stack**: `llama-cpp-4` + `hf-hub` + `sysinfo` + `syspeek`.
+**Primary stack**: MLX (`mlx-rs`/`mlxcel`) on Mac · `llama-cpp-4` / `mistral.rs`
+on Win/Linux · `hf-hub` + `sysinfo` + `syspeek`.
+
+### 4.3 Architecture invariants (DECIDED)
+
+- **Embedded runner.** The engine runs inside the Clif binary. No external
+  server dependency. (Saves the localhost-API hop, but the real wins are single-
+  binary UX + direct KV-cache / speculative-decoding control.)
+- **Harness stays single-model.** The agent harness always targets one
+  `ModelBackend`. Local vs cloud (OpenRouter) is just a different backend. Local
+  models reuse the same single-active-model path that OpenRouter uses today.
+- **One active model in v1.** Users may download several models (disk only);
+  exactly one is loaded/active at a time. OpenRouter remains the cloud fallback.
+- **Performance moat is the orchestration layer, not custom kernels.**
+  Speculative decoding (small draft + big model), prefix/KV caching, and
+  context minimization (reuse `repomap.rs` + indexer) live inside the local
+  engine — transparent to the harness. This is where "fastest local *coding*
+  service" is actually won (target metric: time-to-first-useful-edit, not raw
+  decode tok/s). Marked **Phase 2** below.
 
 ## 5. New Feature: Local Models Tab (ClifPad)
 
@@ -107,7 +142,29 @@ Opportunity:
 
 ## 9. Open Questions / Risks
 
-- How aggressively do we want to push local vs keep cloud as primary?
-- Do we support multiple local models loaded at once (complex) or single active model?
-- Should we offer a "Best coding performance" vs "Best speed" recommendation mode?
-- Binary size impact of embedding `llama-cpp-4`?
+**Resolved:**
+- ~~Which runtime?~~ → MLX on Mac (primary), `llama-cpp-4` / `mistral.rs` on
+  Win/Linux. Embedded in-process. (§4.1)
+- ~~Single vs multiple models loaded?~~ → **Single active model in v1.** Harness
+  stays single-model. Multi-resident is only ever for the optional speculative-
+  decoding draft model (Phase 2) — still presented to the user as one model.
+- ~~Embed vs external server (LM Studio/Ollama)?~~ → **Embed.** Single binary, no
+  external dependency, direct cache control.
+
+**Still open:**
+- How aggressively do we push local vs keep cloud (OpenRouter) as primary?
+- "Best coding performance" vs "Best speed" recommendation mode — offer both?
+- Binary-size impact of bundling MLX + llama.cpp; consider dynamic/lazy loading
+  of the engine so a cloud-only user doesn't pay for it.
+- MLX-format vs GGUF weights: do we download both, or convert? (`hf-hub` covers
+  both, but the catalog must track which format each engine needs.)
+
+## 10. Phasing
+
+- **Phase 1 (ship first):** embedded single runner per platform, Local Models tab
+  (hardware detect → recommend → download → load), one active local model,
+  OpenRouter cloud fallback. No speculative decoding, no multi-model.
+- **Phase 2 (optional, non-breaking speedups):** speculative decoding (Candle
+  draft model + main model), prefix/KV caching, context minimization via the
+  existing indexer/repomap. Optional per-task model routing. All invisible to the
+  harness contract.
