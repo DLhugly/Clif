@@ -60,7 +60,7 @@ const GitIcon = () => (
 
 // ---------------------------------------------------------------------------
 // PillButton: reusable small pill for panel toggles. Mirrors the visual
-// language used in TopBar/ModeToggle so the three panel toggles (Terminal,
+// language used in TopBar so the three panel toggles (Terminal,
 // Editor, Agent) all look and feel consistent across the app.
 // ---------------------------------------------------------------------------
 

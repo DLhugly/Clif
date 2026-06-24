@@ -24,8 +24,6 @@ import { produce } from "solid-js/store";
 import { activeFile, projectRoot, fileTree } from "../../stores/fileStore";
 import type { FileEntry } from "../../types/files";
 import { currentBranch } from "../../stores/gitStore";
-import { prs, reviewResults } from "../../stores/reviewsStore";
-import { classifications } from "../../stores/classificationStore";
 import { settings, updateSettings } from "../../stores/settingsStore";
 import { fontSize } from "../../stores/uiStore";
 import { getApiKey, setApiKey as saveApiKey, agentApproveCommand, clifProjectInitialized, clifReadContext, clifInitProject, getModels } from "../../lib/tauri";
@@ -493,38 +491,6 @@ const AgentChatPanel: Component = () => {
     const files = contextFiles();
     if (files.length > 0) ctx.files = files;
     ctx.agentMode = agentMode();
-
-    const tabId = activeAgentTab();
-    if (tabId && tabId.startsWith("pr-")) {
-      const n = Number.parseInt(tabId.slice(3), 10);
-      if (Number.isFinite(n)) {
-        const pr = prs.find((p) => p.number === n);
-        const cls = classifications[n];
-        const review = reviewResults[n];
-        const signalsSummary = cls
-          ? cls.signals
-              .slice()
-              .sort((a, b) => b.points - a.points)
-              .slice(0, 6)
-              .map((s) => `${s.label} (+${s.points})`)
-              .join("; ")
-          : "";
-        ctx.reviewPr = {
-          number: n,
-          title: pr?.title ?? `PR #${n}`,
-          author: pr?.author?.login ?? null,
-          url: pr?.url ?? null,
-          head_ref: pr?.headRefName ?? null,
-          base_ref: pr?.baseRefName ?? null,
-          tier: cls?.tier ?? null,
-          score: cls?.score ?? null,
-          hard_override: cls?.hard_override ?? null,
-          touched_files: cls?.touched_files ?? [],
-          findings_count: review?.findings.length ?? 0,
-          signals_summary: signalsSummary,
-        };
-      }
-    }
 
     return Object.keys(ctx).length > 0 ? ctx : undefined;
   }

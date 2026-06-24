@@ -2,7 +2,7 @@ import { createSignal, createEffect } from "solid-js";
 
 export type Theme = "midnight" | "graphite" | "dawn" | "arctic" | "dusk" | "cyberpunk" | "ember" | "forest" | "solarized-dark" | "monokai" | "nord" | "dracula" | "one-dark" | "tokyo-night" | "catppuccin" | "rose-pine" | "ayu-dark" | "vesper" | "poimandres" | "pale-fire";
 
-export type Panel = "terminal" | "agent" | "files" | "editor" | "reviews";
+export type Panel = "terminal" | "agent" | "files" | "editor";
 
 export interface ThemeMeta {
   label: string;
@@ -36,8 +36,7 @@ export const THEMES: Record<Theme, ThemeMeta> = {
 
 // Panel visibility — single source of truth
 // Default panel set on app launch. Opens the full workstation layout: file
-// tree, editor, agent chat, and terminal all visible. Reviews is a mode-
-// switch, not a panel, so it stays out of this set.
+// tree, editor, agent chat, and terminal all visible.
 const [visiblePanels, setVisiblePanels] = createSignal<Set<Panel>>(
   new Set(["files", "editor", "agent", "terminal"]),
 );
@@ -46,19 +45,18 @@ const [visiblePanels, setVisiblePanels] = createSignal<Set<Panel>>(
 const [terminalHeight, setTerminalHeight] = createSignal(30);
 const [sidebarWidth, setSidebarWidth] = createSignal(240);
 const [agentWidth, setAgentWidth] = createSignal(380);
-const [reviewsWidth, setReviewsWidth] = createSignal(340);
 
 // Clamp panel width to ensure it doesn't push other panels off screen
 export function clampPanelWidth(
   panelWidth: number,
-  panelType: "sidebar" | "agent" | "reviews",
+  panelType: "sidebar" | "agent",
   windowWidth: number,
   otherPanelWidth: number
 ): number {
   const minWidth = 200;
   // Allow panels to expand flexibly based on window size
   // Agent: up to 70% for reading responses
-  // Sidebar / Reviews: up to 50% for list / git views
+  // Sidebar: up to 50% for list / git views
   const maxPercentOfWindow = panelType === "agent" ? 0.7 : 0.5;
   const calculatedMax = Math.floor(windowWidth * maxPercentOfWindow);
 
@@ -76,11 +74,9 @@ const [showCommandPalette, setShowCommandPalette] = createSignal(false);
 const [devDrawerOpen, setDevDrawerOpen] = createSignal(false);
 const [devDrawerHeight, setDevDrawerHeight] = createSignal(50);
 
-// Top-level view mode — Code (normal IDE) or Review (PR review workspace).
-// The app always boots into Code mode regardless of the previous session.
-// Review mode is an intentional context switch the user opts into via the
-// top-bar toggle (or by clicking a PR row), not a sticky preference.
-export type ViewMode = "code" | "review";
+// Top-level view mode. Only Code (normal IDE) remains; retained as a single-
+// value type so existing `viewMode()` callers keep working.
+export type ViewMode = "code";
 const VIEW_MODE_STORAGE_KEY = "clif.viewMode";
 // Clean up any stale persisted value from earlier builds that auto-remembered
 // review mode. Safe no-op if the key is missing.
@@ -95,24 +91,13 @@ const [viewMode, setViewModeSignal] = createSignal<ViewMode>("code");
 
 function setViewMode(mode: ViewMode) {
   setViewModeSignal(mode);
-  // Persistence deliberately omitted: we don't want the IDE to jump into
-  // Review mode on next launch just because the last session ended there.
 }
-
-function toggleViewMode() {
-  setViewMode(viewMode() === "code" ? "review" : "code");
-}
-
-// Layout widths inside Review mode
-const [reviewLeftWidth, setReviewLeftWidth] = createSignal(340);
-const [reviewRightWidth, setReviewRightWidth] = createSignal(360);
 
 // Derived visibility signals for backward compatibility
 const terminalVisible = () => visiblePanels().has("terminal");
 const agentVisible = () => visiblePanels().has("agent");
 const sidebarVisible = () => visiblePanels().has("files");
 const editorVisible = () => visiblePanels().has("editor");
-const reviewsVisible = () => visiblePanels().has("reviews");
 
 // Helper functions to toggle panels
 function togglePanel(panel: Panel) {
@@ -182,14 +167,6 @@ function toggleEditor() {
   togglePanel("editor");
 }
 
-function toggleReviewsPanel() {
-  togglePanel("reviews");
-}
-
-function setReviewsVisible(visible: boolean) {
-  visible ? showPanel("reviews") : hidePanel("reviews");
-}
-
 // Backward-compatible setter functions (deprecated, but kept for compatibility)
 function setTerminalVisible(visible: boolean) {
   visible ? showPanel("terminal") : hidePanel("terminal");
@@ -222,13 +199,10 @@ export {
   toggleSidebar,
   toggleAgentPanel,
   toggleEditor,
-  toggleReviewsPanel,
   setTerminalVisible,
   setSidebarVisible,
   setAgentVisible,
   setEditorVisible,
-  setReviewsVisible,
-  reviewsVisible,
 
   // Panel sizes
   terminalHeight,
@@ -237,8 +211,6 @@ export {
   setSidebarWidth,
   agentWidth,
   setAgentWidth,
-  reviewsWidth,
-  setReviewsWidth,
 
   // Theme
   theme,
@@ -260,11 +232,4 @@ export {
   // Top-level mode
   viewMode,
   setViewMode,
-  toggleViewMode,
-
-  // Review mode layout
-  reviewLeftWidth,
-  setReviewLeftWidth,
-  reviewRightWidth,
-  setReviewRightWidth,
 };

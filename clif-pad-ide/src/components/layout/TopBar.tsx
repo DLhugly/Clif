@@ -5,7 +5,6 @@ import type { Theme } from "../../stores/uiStore";
 import { settings, updateSettings } from "../../stores/settingsStore";
 import { projectRoot } from "../../stores/fileStore";
 import { MONO_FONTS, loadGoogleFont, applyUiFont } from "../../lib/fonts";
-import ModeToggle from "./ModeToggle";
 
 // ---------------------------------------------------------------------------
 // Inline SVG icons
@@ -473,17 +472,6 @@ const TopBar: Component<{
             {getProjectName()}
           </span>
         </Show>
-        <div
-          style={{
-            width: "1px",
-            height: "14px",
-            background: "var(--border-default)",
-            opacity: "0.6",
-            margin: "0 4px",
-            "flex-shrink": "0",
-          }}
-        />
-        <ModeToggle />
       </div>
 
       {/* Draggable spacer */}

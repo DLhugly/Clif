@@ -6,7 +6,7 @@ import RightSidebar from "./components/layout/RightSidebar";
 import AboutModal from "./components/layout/AboutModal";
 import ToastContainer from "./components/layout/ToastContainer";
 import { ResizeHandle } from "./components/ui";
-import { terminalHeight, setTerminalHeight, terminalVisible, sidebarVisible, sidebarWidth, setSidebarWidth, agentWidth, setAgentWidth, agentVisible, setAgentVisible, editorVisible, applyTheme, setUiFontSize, toggleTerminal, toggleSidebar, viewMode, toggleViewMode, setShowCommandPalette, clampPanelWidth } from "./stores/uiStore";
+import { terminalHeight, setTerminalHeight, terminalVisible, sidebarVisible, sidebarWidth, setSidebarWidth, agentWidth, setAgentWidth, agentVisible, setAgentVisible, editorVisible, applyTheme, setUiFontSize, toggleTerminal, toggleSidebar, viewMode, setShowCommandPalette, clampPanelWidth } from "./stores/uiStore";
 import { loadSettings, settings } from "./stores/settingsStore";
 import { registerKeybinding, initKeybindings } from "./lib/keybindings";
 import { saveActiveFile, projectRoot, openProject, openBrowser, togglePreview } from "./stores/fileStore";
@@ -18,7 +18,6 @@ import type { TerminalPanelRef } from "./components/terminal/TerminalPanel";
 
 const TerminalPanel = lazy(() => import("./components/terminal/TerminalPanel"));
 const AgentChatPanel = lazy(() => import("./components/agent/AgentChatPanel"));
-const ReviewWorkspace = lazy(() => import("./components/reviews/ReviewWorkspace"));
 const CloneRepoModal = lazy(() => import("./components/layout/CloneRepoModal"));
 
 const App: Component = () => {
@@ -207,8 +206,6 @@ function handleSidebarResize(e: MouseEvent) {
     registerKeybinding("b", ["ctrl"], toggleSidebar, "Toggle sidebar");
     registerKeybinding("p", ["ctrl", "shift"], () => setShowCommandPalette(true), "Command palette");
     registerKeybinding("v", ["ctrl", "shift"], togglePreview, "Toggle markdown preview");
-    registerKeybinding("r", ["meta", "shift"], toggleViewMode, "Toggle Review mode");
-    registerKeybinding("r", ["ctrl", "shift"], toggleViewMode, "Toggle Review mode");
 
     initKeybindings();
 
@@ -237,23 +234,7 @@ function handleSidebarResize(e: MouseEvent) {
       {/* Top Bar */}
       <TopBar onOpenFolder={handleOpenFolder} onOpenBrowser={openBrowser} />
 
-      {/* Main content: either Code mode (editor + sidebars) or Review mode takeover */}
-      <Show when={viewMode() === "review"}>
-        <div class="flex-1 min-h-0 w-full overflow-hidden">
-          <Suspense
-            fallback={
-              <div
-                class="flex items-center justify-center h-full"
-                style={{ color: "var(--text-muted)", background: "var(--bg-base)" }}
-              >
-                <span class="text-sm">Loading review workspace...</span>
-              </div>
-            }
-          >
-            <ReviewWorkspace />
-          </Suspense>
-        </div>
-      </Show>
+      {/* Main content: editor + sidebars */}
       <Show when={viewMode() === "code"}>
       <div class="flex flex-1 min-h-0 w-full max-w-full overflow-hidden">
         {/* Editor Area (with terminal at bottom) */}
