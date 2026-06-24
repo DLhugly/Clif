@@ -5,6 +5,7 @@ pub mod fs;
 pub mod gh;
 pub mod git;
 pub mod indexer;
+pub mod local_models;
 pub mod lsp;
 pub mod pty;
 pub mod search;

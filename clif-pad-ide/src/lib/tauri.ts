@@ -500,3 +500,50 @@ export async function prClassifyBatch(
 ): Promise<import("../types/classification").PrClassification[]> {
   return invoke("pr_classify_batch", { workspaceDir, prNumbers });
 }
+
+// ---------------------------------------------------------------------------
+// Local Models (embedded LLM runtime — PRD: docs/PRD-local-models-tab.md)
+// ---------------------------------------------------------------------------
+
+import type {
+  HardwareInfo,
+  CatalogEntry,
+  DownloadedModel,
+  DownloadProgress,
+} from "../types/localModels";
+
+export async function localDetectHardware(): Promise<HardwareInfo> {
+  return invoke("local_detect_hardware");
+}
+
+export async function localModelsCatalog(): Promise<CatalogEntry[]> {
+  return invoke("local_models_catalog");
+}
+
+export async function localModelsList(): Promise<DownloadedModel[]> {
+  return invoke("local_models_list");
+}
+
+export async function localModelDownload(id: string): Promise<void> {
+  return invoke("local_model_download", { id });
+}
+
+export async function localModelDelete(id: string): Promise<void> {
+  return invoke("local_model_delete", { id });
+}
+
+export async function localModelSetActive(id: string): Promise<void> {
+  return invoke("local_model_set_active", { id });
+}
+
+export async function localModelActive(): Promise<string | null> {
+  return invoke("local_model_active");
+}
+
+export function onLocalModelDownloadProgress(
+  callback: (p: DownloadProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<DownloadProgress>("local_model_download_progress", (e) =>
+    callback(e.payload),
+  );
+}

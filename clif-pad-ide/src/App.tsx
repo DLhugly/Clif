@@ -6,7 +6,7 @@ import RightSidebar from "./components/layout/RightSidebar";
 import AboutModal from "./components/layout/AboutModal";
 import ToastContainer from "./components/layout/ToastContainer";
 import { ResizeHandle } from "./components/ui";
-import { terminalHeight, setTerminalHeight, terminalVisible, sidebarVisible, sidebarWidth, setSidebarWidth, agentWidth, setAgentWidth, agentVisible, setAgentVisible, editorVisible, applyTheme, setUiFontSize, toggleTerminal, toggleSidebar, viewMode, setShowCommandPalette, clampPanelWidth } from "./stores/uiStore";
+import { terminalHeight, setTerminalHeight, terminalVisible, sidebarVisible, sidebarWidth, setSidebarWidth, agentWidth, setAgentWidth, agentVisible, setAgentVisible, editorVisible, applyTheme, setUiFontSize, toggleTerminal, toggleSidebar, viewMode, setShowCommandPalette, clampPanelWidth, localModelsVisible, localModelsWidth } from "./stores/uiStore";
 import { loadSettings, settings } from "./stores/settingsStore";
 import { registerKeybinding, initKeybindings } from "./lib/keybindings";
 import { saveActiveFile, projectRoot, openProject, openBrowser, togglePreview } from "./stores/fileStore";
@@ -18,6 +18,7 @@ import type { TerminalPanelRef } from "./components/terminal/TerminalPanel";
 
 const TerminalPanel = lazy(() => import("./components/terminal/TerminalPanel"));
 const AgentChatPanel = lazy(() => import("./components/agent/AgentChatPanel"));
+const LocalModelsPanel = lazy(() => import("./components/LocalModelsPanel"));
 const CloneRepoModal = lazy(() => import("./components/layout/CloneRepoModal"));
 
 const App: Component = () => {
@@ -313,6 +314,27 @@ function handleSidebarResize(e: MouseEvent) {
               }
             >
               <AgentChatPanel />
+            </Suspense>
+          </div>
+        </Show>
+
+        {/* Local Models Panel (far right) */}
+        <Show when={localModelsVisible()}>
+          <div
+            style={{ width: `${localModelsWidth()}px`, "border-left": "1px solid var(--border-default)" }}
+            class="h-full shrink-0"
+          >
+            <Suspense
+              fallback={
+                <div
+                  class="flex items-center justify-center h-full"
+                  style={{ color: "var(--text-muted)", background: "var(--bg-base)" }}
+                >
+                  <span class="text-sm">Loading models...</span>
+                </div>
+              }
+            >
+              <LocalModelsPanel />
             </Suspense>
           </div>
         </Show>

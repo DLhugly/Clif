@@ -177,6 +177,13 @@ pub fn run() {
             commands::gh::gh_check_available,
             commands::gh::gh_list_prs,
             commands::gh::gh_pr_detail,
+            commands::local_models::local_detect_hardware,
+            commands::local_models::local_models_catalog,
+            commands::local_models::local_models_list,
+            commands::local_models::local_model_download,
+            commands::local_models::local_model_delete,
+            commands::local_models::local_model_set_active,
+            commands::local_models::local_model_active,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

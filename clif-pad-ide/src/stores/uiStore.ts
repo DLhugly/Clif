@@ -2,7 +2,7 @@ import { createSignal, createEffect } from "solid-js";
 
 export type Theme = "midnight" | "graphite" | "dawn" | "arctic" | "dusk" | "cyberpunk" | "ember" | "forest" | "solarized-dark" | "monokai" | "nord" | "dracula" | "one-dark" | "tokyo-night" | "catppuccin" | "rose-pine" | "ayu-dark" | "vesper" | "poimandres" | "pale-fire";
 
-export type Panel = "terminal" | "agent" | "files" | "editor";
+export type Panel = "terminal" | "agent" | "files" | "editor" | "local-models";
 
 export interface ThemeMeta {
   label: string;
@@ -45,6 +45,7 @@ const [visiblePanels, setVisiblePanels] = createSignal<Set<Panel>>(
 const [terminalHeight, setTerminalHeight] = createSignal(30);
 const [sidebarWidth, setSidebarWidth] = createSignal(240);
 const [agentWidth, setAgentWidth] = createSignal(380);
+const [localModelsWidth, setLocalModelsWidth] = createSignal(480);
 
 // Clamp panel width to ensure it doesn't push other panels off screen
 export function clampPanelWidth(
@@ -98,6 +99,7 @@ const terminalVisible = () => visiblePanels().has("terminal");
 const agentVisible = () => visiblePanels().has("agent");
 const sidebarVisible = () => visiblePanels().has("files");
 const editorVisible = () => visiblePanels().has("editor");
+const localModelsVisible = () => visiblePanels().has("local-models");
 
 // Helper functions to toggle panels
 function togglePanel(panel: Panel) {
@@ -167,6 +169,10 @@ function toggleEditor() {
   togglePanel("editor");
 }
 
+function toggleLocalModels() {
+  togglePanel("local-models");
+}
+
 // Backward-compatible setter functions (deprecated, but kept for compatibility)
 function setTerminalVisible(visible: boolean) {
   visible ? showPanel("terminal") : hidePanel("terminal");
@@ -199,6 +205,8 @@ export {
   toggleSidebar,
   toggleAgentPanel,
   toggleEditor,
+  toggleLocalModels,
+  localModelsVisible,
   setTerminalVisible,
   setSidebarVisible,
   setAgentVisible,
@@ -211,6 +219,8 @@ export {
   setSidebarWidth,
   agentWidth,
   setAgentWidth,
+  localModelsWidth,
+  setLocalModelsWidth,
 
   // Theme
   theme,

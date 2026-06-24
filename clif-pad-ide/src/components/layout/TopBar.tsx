@@ -1,5 +1,5 @@
 import { Component, Show, For, createSignal, onCleanup } from "solid-js";
-import { theme, applyTheme, fontSize, setUiFontSize, THEMES, toggleSidebar, sidebarVisible } from "../../stores/uiStore";
+import { theme, applyTheme, fontSize, setUiFontSize, THEMES, toggleSidebar, sidebarVisible, toggleLocalModels, localModelsVisible } from "../../stores/uiStore";
 import { securityEnabled, setSecurityEnabled } from "../../stores/securityStore";
 import type { Theme } from "../../stores/uiStore";
 import { settings, updateSettings } from "../../stores/settingsStore";
@@ -494,6 +494,22 @@ const TopBar: Component<{
           title={sidebarVisible() ? "Hide Git/Files panel" : "Show Git/Files panel"}
         >
           <FolderIcon />
+        </IconButton>
+
+        <IconButton
+          label="Models"
+          active={localModelsVisible()}
+          onClick={() => toggleLocalModels()}
+          title={localModelsVisible() ? "Hide Local Models" : "Show Local Models"}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4" y="4" width="16" height="16" rx="2" />
+            <rect x="9" y="9" width="6" height="6" />
+            <line x1="9" y1="1" x2="9" y2="4" /><line x1="15" y1="1" x2="15" y2="4" />
+            <line x1="9" y1="20" x2="9" y2="23" /><line x1="15" y1="20" x2="15" y2="23" />
+            <line x1="20" y1="9" x2="23" y2="9" /><line x1="20" y1="14" x2="23" y2="14" />
+            <line x1="1" y1="9" x2="4" y2="9" /><line x1="1" y1="14" x2="4" y2="14" />
+          </svg>
         </IconButton>
 
         <SettingsMenu />
