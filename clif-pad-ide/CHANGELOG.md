@@ -1,3 +1,10 @@
+# [1.72.0](https://github.com/DLhugly/Clif-Code/compare/v1.71.0...v1.72.0) (2026-06-24)
+
+
+### Features
+
+* remove PR review mode and triage suite (moved to feature/review-mode) ([7f7333f](https://github.com/DLhugly/Clif-Code/commit/7f7333f9c76673c2523db0fc1cfea350615ac8a1))
+
 # [1.71.0](https://github.com/DLhugly/Clif-Code/compare/v1.70.0...v1.71.0) (2026-04-26)
 
 
