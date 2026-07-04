@@ -6,15 +6,8 @@ import { POPULAR_MODELS } from "../agent/constants";
 import type { OpenRouterModel } from "../agent/constants";
 import type { DiscoverySource } from "../../types/localModels";
 
-// Which discovery sources can actually run today (via a local OpenAI-compatible
-// server). Clif's own embedded engine isn't wired yet, so those are informational.
-const RUNNABLE: Record<DiscoverySource, { provider: string; port: number } | null> = {
-  lmstudio: { provider: "lmstudio", port: 1234 },
-  ollama: { provider: "ollama", port: 11434 },
-  huggingface: null,
-  clif: null,
-};
-
+// All discovered GGUF files run in Clif's OWN embedded engine (llama.cpp) — no
+// external server. We just need the file path; the source is only a label.
 const SOURCE_LABEL: Record<DiscoverySource, string> = {
   lmstudio: "LM Studio",
   ollama: "Ollama",
@@ -24,8 +17,7 @@ const SOURCE_LABEL: Record<DiscoverySource, string> = {
 
 const PROVIDER_DOT: Record<string, string> = {
   openrouter: "#a855f7",
-  lmstudio: "#f472b6",
-  ollama: "#818cf8",
+  local: "#22c55e",
 };
 
 const UnifiedModelSelector: Component = () => {
@@ -34,8 +26,17 @@ const UnifiedModelSelector: Component = () => {
   const [search, setSearch] = createSignal("");
   let root: HTMLDivElement | undefined;
 
-  const currentModel = () => settings().aiModel || "Select model";
   const currentProvider = () => settings().aiProvider || "openrouter";
+  // Local models are stored as a full path — show just the filename.
+  const currentModel = () => {
+    const m = settings().aiModel;
+    if (!m) return "Select model";
+    if (currentProvider() === "local") {
+      const base = m.split("/").pop() || m;
+      return base.replace(/\.gguf$/i, "");
+    }
+    return m;
+  };
 
   async function fetchOpenRouter() {
     if (orModels().length > 0) return;
@@ -73,8 +74,8 @@ const UnifiedModelSelector: Component = () => {
       : base.slice(0, 40);
   });
 
-  // Only surface local models we can actually route to today.
-  const localModels = createMemo(() => discovered().filter((d) => RUNNABLE[d.source]));
+  // Every discovered GGUF is runnable in the embedded engine.
+  const localModels = createMemo(() => discovered());
 
   const onDocClick = (e: MouseEvent) => {
     if (root && !root.contains(e.target as Node)) setOpen(false);
@@ -138,19 +139,18 @@ const UnifiedModelSelector: Component = () => {
               when={localModels().length > 0}
               fallback={
                 <div style={{ padding: "6px 8px 10px", "font-size": "11px", color: "var(--text-muted)", "line-height": "1.5" }}>
-                  No runnable local models found. Download one in Manage, or start
-                  LM Studio / Ollama with a model loaded.
+                  No local models found. Download one in Manage — it runs in Clif's
+                  built-in engine, no external app needed.
                 </div>
               }
             >
               <For each={localModels()}>
                 {(d) => {
-                  const run = RUNNABLE[d.source]!;
-                  const active = () => currentProvider() === run.provider && settings().aiModel === d.name;
+                  const active = () => currentProvider() === "local" && settings().aiModel === d.path;
                   return (
                     <button
                       class="flex items-center justify-between gap-2 rounded-md transition-colors"
-                      onClick={() => pick(run.provider, d.name)}
+                      onClick={() => pick("local", d.path)}
                       style={{
                         padding: "7px 8px", width: "100%", cursor: "pointer", "text-align": "left",
                         background: active() ? "color-mix(in srgb, var(--accent-primary) 12%, transparent)" : "transparent",
@@ -158,7 +158,7 @@ const UnifiedModelSelector: Component = () => {
                       }}
                     >
                       <span class="flex items-center gap-2 min-w-0">
-                        <span style={{ width: "7px", height: "7px", "border-radius": "999px", background: PROVIDER_DOT[run.provider] }} />
+                        <span style={{ width: "7px", height: "7px", "border-radius": "999px", background: PROVIDER_DOT.local }} />
                         <span class="truncate" style={{ "font-size": "12px", color: "var(--text-primary)", "font-weight": active() ? "700" : "500" }}>{d.name}</span>
                       </span>
                       <span style={{ "font-size": "9px", color: "var(--text-muted)", "white-space": "nowrap" }}>{SOURCE_LABEL[d.source]}</span>

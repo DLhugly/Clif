@@ -1678,6 +1678,76 @@ pub async fn agent_chat(
     Ok(())
 }
 
+/// Stream one turn from a local model (embedded llama.cpp engine) into the same
+/// `agent_stream` events the frontend already consumes. Single-shot text; no
+/// tool loop yet. `model` is a catalog id or an absolute path to a .gguf.
+async fn run_local_turn(
+    app: tauri::AppHandle,
+    label: &str,
+    model: String,
+    conversation: Vec<serde_json::Value>,
+    cancel_rx: tokio::sync::oneshot::Receiver<()>,
+) -> Result<(), String> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    // Flatten OpenAI-style messages to (role, text). Images/tool frames collapse
+    // to text; roles the template doesn't know map to "user".
+    let messages: Vec<(String, String)> = conversation
+        .iter()
+        .filter_map(|m| {
+            let role = m.get("role")?.as_str()?;
+            let content = match m.get("content") {
+                Some(serde_json::Value::String(s)) => s.clone(),
+                Some(serde_json::Value::Array(parts)) => parts
+                    .iter()
+                    .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                _ => return None,
+            };
+            let role = match role {
+                "system" | "user" | "assistant" => role,
+                _ => "user",
+            };
+            Some((role.to_string(), content))
+        })
+        .collect();
+
+    let _ = app.emit_to(label, "agent_status", "Thinking...");
+
+    // Bridge the cancel oneshot to an atomic the blocking generator can poll.
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_watch = cancel.clone();
+    tokio::spawn(async move {
+        let _ = cancel_rx.await;
+        cancel_watch.store(true, Ordering::Relaxed);
+    });
+
+    let app_stream = app.clone();
+    let label_stream = label.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::commands::local_models::stream_local_turn(
+            &model,
+            &messages,
+            1024,
+            &cancel,
+            &mut |piece| {
+                let _ = app_stream.emit_to(&label_stream, "agent_stream", piece);
+            },
+        )
+    })
+    .await
+    .map_err(|e| format!("local engine task failed: {e}"))?;
+
+    let _ = app.emit_to(label, "agent_status", "");
+    if let Err(e) = result {
+        let _ = app.emit_to(label, "agent_stream", format!("\n\n[local engine error: {e}]"));
+    }
+    let _ = app.emit_to(label, "agent_stream", "[DONE]");
+    Ok(())
+}
+
 async fn run_agent_loop(
     app: tauri::AppHandle,
     label: &str,
@@ -1835,6 +1905,13 @@ async fn run_agent_loop(
             "role": msg.role,
             "content": content_value,
         }));
+    }
+
+    // Local models run in Clif's embedded engine (llama.cpp), not over HTTP.
+    // v1: streaming chat with the model's own chat template. Tool-calling for
+    // local models is a follow-up; the cloud path below keeps full tool support.
+    if provider == "local" {
+        return run_local_turn(app, label, model, conversation, cancel_rx).await;
     }
 
     let raw_tools = tool_definitions();

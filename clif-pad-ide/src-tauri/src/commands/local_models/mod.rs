@@ -29,6 +29,48 @@ fn engine() -> Result<&'static engine::Engine, String> {
         .map_err(|e| e.clone())
 }
 
+/// Resolve a local "model" string to a GGUF path. Accepts either an absolute
+/// path to a .gguf (e.g. a discovered LM Studio / HF-cache file) or a catalog id
+/// that's been downloaded via Clif. Lets the agent run models the user already
+/// has — inside Clif's embedded engine, not any external server.
+pub fn resolve_local_path(model: &str) -> Option<std::path::PathBuf> {
+    let p = std::path::Path::new(model);
+    if p.is_absolute() && p.exists() {
+        return Some(p.to_path_buf());
+    }
+    // Active model shorthand.
+    if model.is_empty() || model == "active" {
+        if let Some(active) = store::read_active() {
+            return store::downloaded_file(&active);
+        }
+    }
+    store::downloaded_file(model)
+}
+
+/// Stream one turn from a local model into `on_token`. Loads the model on first
+/// use (cached by path), applies the model's own chat template, and generates.
+/// Used by the agent loop for `provider == "local"`.
+pub fn stream_local_turn(
+    model: &str,
+    messages: &[(String, String)],
+    max_tokens: i32,
+    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    on_token: &mut dyn FnMut(&str),
+) -> Result<(), String> {
+    let path = resolve_local_path(model)
+        .ok_or_else(|| format!("local model '{model}' not found on disk"))?;
+    let key = path.to_string_lossy().to_string();
+
+    let eng = engine()?;
+    if eng.loaded_id().as_deref() != Some(key.as_str()) {
+        // Generous context for the agent system prompt; capped for memory.
+        eng.load(&key, &path, 8192)?;
+    }
+    let prompt = eng.apply_template(messages)?;
+    eng.generate_stream(&prompt, max_tokens, cancel, on_token)?;
+    Ok(())
+}
+
 /// One downloadable quant of a model, with real HF size + hardware fit.
 #[derive(Serialize)]
 pub struct VariantFit {
