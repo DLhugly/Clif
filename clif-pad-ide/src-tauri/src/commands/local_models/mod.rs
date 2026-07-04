@@ -2,7 +2,7 @@
 //! on-device coding models. (PRD: docs/PRD-local-models-tab.md, Phase 1.)
 //!
 //! Filenames + sizes are resolved from the Hugging Face API (see `hf.rs`), never
-//! guessed. Inference itself goes through `engine::LocalEngine` (stubbed in v1).
+//! guessed. Inference runs in-process via `engine::Engine` (llama.cpp / GGUF).
 
 mod catalog;
 mod download;
@@ -16,7 +16,18 @@ use catalog::CatalogEntry;
 use hardware::HardwareInfo;
 use hf::HfModelSummary;
 use serde::Serialize;
+use std::sync::OnceLock;
 use tauri::AppHandle;
+
+/// Process-wide inference engine (llama.cpp backend inits once, lazily).
+static ENGINE: OnceLock<Result<engine::Engine, String>> = OnceLock::new();
+
+fn engine() -> Result<&'static engine::Engine, String> {
+    ENGINE
+        .get_or_init(engine::Engine::new)
+        .as_ref()
+        .map_err(|e| e.clone())
+}
 
 /// One downloadable quant of a model, with real HF size + hardware fit.
 #[derive(Serialize)]
@@ -259,4 +270,48 @@ pub fn local_model_active() -> Result<Option<String>, String> {
 #[tauri::command]
 pub fn local_scan_existing() -> Result<Vec<scan::DiscoveredModel>, String> {
     Ok(scan::scan())
+}
+
+/// Status of the embedded engine: backend + which model is resident.
+#[tauri::command]
+pub fn local_engine_status() -> Result<serde_json::Value, String> {
+    let loaded = engine().ok().and_then(|e| e.loaded_id());
+    let backend = if cfg!(target_os = "macos") {
+        "llama.cpp (Metal)"
+    } else {
+        "llama.cpp (CPU)"
+    };
+    Ok(serde_json::json!({
+        "backend": backend,
+        "loaded": loaded,
+        "active": store::read_active(),
+    }))
+}
+
+/// Run the active local model in-process and return a completion. Loads the
+/// model on first use. Proof that inference runs inside Clif — the streaming +
+/// tool-call agent path wires in next.
+#[tauri::command]
+pub async fn local_engine_generate(
+    prompt: String,
+    max_tokens: Option<i32>,
+) -> Result<String, String> {
+    // Generation is GPU/CPU-bound and blocking — keep it off the async runtime.
+    tokio::task::spawn_blocking(move || {
+        let eng = engine()?;
+        let active = store::read_active().ok_or("no active local model set")?;
+
+        if eng.loaded_id().as_deref() != Some(active.as_str()) {
+            let path = store::downloaded_file(&active)
+                .ok_or_else(|| format!("active model '{active}' is not downloaded"))?;
+            let n_ctx = catalog::find(&active)
+                .map(|m| m.context)
+                .unwrap_or(4096)
+                .min(8192);
+            eng.load(&active, &path, n_ctx)?;
+        }
+        eng.generate(&prompt, max_tokens.unwrap_or(256))
+    })
+    .await
+    .map_err(|e| format!("engine task failed: {e}"))?
 }

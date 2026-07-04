@@ -1563,10 +1563,12 @@ fn build_workspace_snapshot(workspace_dir: &str) -> String {
     lines.join("\n")
 }
 
-/// Get the provider URL
+/// Get the provider URL. Local providers point at each tool's OpenAI-compatible
+/// server (must be running); everything else defaults to OpenRouter.
 fn get_provider_url(provider: &str) -> String {
     match provider {
         "ollama" => "http://localhost:11434/v1/chat/completions".to_string(),
+        "lmstudio" => "http://localhost:1234/v1/chat/completions".to_string(),
         _ => "https://openrouter.ai/api/v1/chat/completions".to_string(),
     }
 }
