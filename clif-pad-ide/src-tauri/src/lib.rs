@@ -187,6 +187,7 @@ pub fn run() {
             commands::local_models::local_model_delete,
             commands::local_models::local_model_set_active,
             commands::local_models::local_model_active,
+            commands::local_models::local_scan_existing,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

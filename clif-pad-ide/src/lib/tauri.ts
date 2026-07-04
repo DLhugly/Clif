@@ -513,7 +513,13 @@ import type {
   ResolvedModel,
   HfModelSummary,
   ModelVariants,
+  DiscoveredModel,
 } from "../types/localModels";
+
+/** Scan Ollama / LM Studio / HF cache / Clif for already-downloaded GGUF models. */
+export async function localScanExisting(): Promise<DiscoveredModel[]> {
+  return invoke("local_scan_existing");
+}
 
 export async function localDetectHardware(): Promise<HardwareInfo> {
   return invoke("local_detect_hardware");

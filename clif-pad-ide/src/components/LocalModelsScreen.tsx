@@ -8,6 +8,8 @@ import {
   variants,
   variantsLoading,
   selectedId,
+  discovered,
+  scanning,
   refresh,
   select,
   download,
@@ -15,7 +17,7 @@ import {
   setActive,
 } from "../stores/localModelsStore";
 import { toggleLocalModels } from "../stores/uiStore";
-import type { CatalogEntry, Fit, Speed } from "../types/localModels";
+import type { CatalogEntry, Fit, Speed, DiscoverySource } from "../types/localModels";
 
 const FIT_COLOR: Record<Fit, string> = {
   comfortable: "#22c55e",
@@ -36,6 +38,13 @@ const ROLE_LABEL: Record<string, string> = {
   reasoning: "Reasoning",
   general: "General",
   autocomplete: "Autocomplete",
+};
+
+const SOURCE_META: Record<DiscoverySource, { label: string; color: string }> = {
+  ollama: { label: "Ollama", color: "#818cf8" },
+  lmstudio: { label: "LM Studio", color: "#f472b6" },
+  huggingface: { label: "HF cache", color: "#38bdf8" },
+  clif: { label: "Clif", color: "var(--accent-primary)" },
 };
 
 const gb = (bytes: number) => `${(bytes / 1e9).toFixed(1)} GB`;
@@ -354,6 +363,41 @@ const LocalModelsScreen: Component = () => {
 
             <Show when={selected()}>
               <Detail e={selected()!} />
+            </Show>
+
+            {/* Already on your system */}
+            <Show when={discovered().length > 0 || scanning()}>
+              <div class="flex items-center gap-2" style={{ "margin-top": "4px" }}>
+                <span style={{ "font-size": "13px", "font-weight": "600", color: "var(--text-primary)" }}>
+                  Found on your system
+                </span>
+                <Show when={scanning()}>
+                  <span style={{ "font-size": "10px", color: "var(--text-muted)" }}>scanning…</span>
+                </Show>
+                <Show when={discovered().length > 0}>
+                  <Badge color="#818cf8">{discovered().length} GGUF</Badge>
+                </Show>
+              </div>
+              <div class="flex flex-col gap-1">
+                <For each={discovered()}>
+                  {(d) => (
+                    <div
+                      class="flex items-center justify-between gap-3 rounded-md"
+                      style={{ padding: "8px 11px", background: "var(--bg-surface)", border: "1px solid var(--border-default)" }}
+                    >
+                      <div class="flex items-center gap-2 min-w-0">
+                        <Badge color={SOURCE_META[d.source].color}>{SOURCE_META[d.source].label}</Badge>
+                        <span class="truncate" style={{ "font-size": "12px", "font-weight": "600", color: "var(--text-primary)" }}>{d.name}</span>
+                        <span style={{ "font-size": "10px", color: "var(--text-muted)" }}>{d.quant}</span>
+                      </div>
+                      <span style={{ "font-size": "11px", color: "var(--text-muted)", "white-space": "nowrap" }}>{gb(d.size_bytes)}</span>
+                    </div>
+                  )}
+                </For>
+                <span style={{ "font-size": "10px", color: "var(--text-muted)", "margin-top": "2px" }}>
+                  Detected from Ollama, LM Studio and the Hugging Face cache. Once the local engine lands, these become loadable directly — no re-download.
+                </span>
+              </div>
             </Show>
 
             <span style={{ "font-size": "13px", "font-weight": "600", color: "var(--text-primary)", "margin-top": "4px" }}>

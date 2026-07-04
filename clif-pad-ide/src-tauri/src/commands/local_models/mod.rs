@@ -9,6 +9,7 @@ mod download;
 mod engine;
 mod hardware;
 mod hf;
+mod scan;
 mod store;
 
 use catalog::CatalogEntry;
@@ -252,4 +253,10 @@ pub fn local_model_set_active(id: String) -> Result<(), String> {
 #[tauri::command]
 pub fn local_model_active() -> Result<Option<String>, String> {
     Ok(store::read_active())
+}
+
+/// Discover GGUF models already on disk from Ollama / LM Studio / HF cache / Clif.
+#[tauri::command]
+pub fn local_scan_existing() -> Result<Vec<scan::DiscoveredModel>, String> {
+    Ok(scan::scan())
 }

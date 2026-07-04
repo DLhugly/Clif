@@ -91,3 +91,14 @@ export interface HfModelSummary {
   downloads: number;
   likes: number;
 }
+
+export type DiscoverySource = "lmstudio" | "huggingface" | "ollama" | "clif";
+
+export interface DiscoveredModel {
+  source: DiscoverySource;
+  name: string;
+  filename: string;
+  path: string;
+  size_bytes: number;
+  quant: string;
+}

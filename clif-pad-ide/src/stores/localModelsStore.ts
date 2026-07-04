@@ -7,6 +7,7 @@ import {
   localModelDownload,
   localModelDelete,
   localModelSetActive,
+  localScanExisting,
   onLocalModelDownloadProgress,
 } from "../lib/tauri";
 import type {
@@ -15,6 +16,7 @@ import type {
   DownloadProgress,
   ResolvedModel,
   ModelVariants,
+  DiscoveredModel,
 } from "../types/localModels";
 
 const [hardware, setHardware] = createSignal<HardwareInfo | null>(null);
@@ -36,6 +38,10 @@ const [variantsLoading, setVariantsLoading] = createSignal<Record<string, boolea
 // The model whose detail view is open in the full-screen experience.
 const [selectedId, setSelectedId] = createSignal<string | null>(null);
 
+// GGUF models already on disk from other tools (Ollama / LM Studio / HF cache).
+const [discovered, setDiscovered] = createSignal<DiscoveredModel[]>([]);
+const [scanning, setScanning] = createSignal(false);
+
 let progressListenerStarted = false;
 
 /** Refresh hardware + catalog (catalog already carries fit/downloaded/active). */
@@ -49,6 +55,7 @@ async function refresh() {
     ]);
     setHardware(hw);
     setCatalog(cat);
+    void scanExisting();
   } catch (e) {
     setError(String(e));
   } finally {
@@ -115,6 +122,19 @@ async function verifyOnHf() {
   setVerifying(false);
 }
 
+/** Scan disk for GGUF models already downloaded by other tools. */
+async function scanExisting() {
+  setScanning(true);
+  try {
+    setDiscovered(await localScanExisting());
+  } catch (e) {
+    // Non-fatal — the catalog still works without discoveries.
+    setDiscovered([]);
+  } finally {
+    setScanning(false);
+  }
+}
+
 /** Lazily fetch HF variant detail (popularity + quant options) for one model. */
 async function loadVariants(id: string, force = false) {
   if (!force && variants()[id]) return;
@@ -166,7 +186,10 @@ export {
   variants,
   variantsLoading,
   selectedId,
+  discovered,
+  scanning,
   refresh,
+  scanExisting,
   verifyOnHf,
   loadVariants,
   select,
