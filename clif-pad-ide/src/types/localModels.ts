@@ -16,24 +16,47 @@ export interface HardwareInfo {
 }
 
 export type Fit = "comfortable" | "good" | "slow" | "too_large";
+export type Speed = "very_fast" | "fast" | "moderate" | "slower";
 
 // CatalogEntry flattens CatalogModel (serde flatten), so model fields are inline.
 export interface CatalogEntry {
   id: string;
   name: string;
   hf_repo: string;
-  file: string;
   params_b: number;
+  active_b: number;
   size_gb: number;
   quant: string;
   min_ram_gb: number;
   context: number;
   role: string;
+  capability: number;
   swe_note: string;
   fit: Fit;
   fit_label: string;
+  speed: Speed;
+  speed_label: string;
   downloaded: boolean;
   active: boolean;
+  recommended: boolean;
+}
+
+export interface VariantFit {
+  filename: string;
+  quant: string;
+  size_bytes: number;
+  fit: Fit;
+  fit_label: string;
+  recommended: boolean;
+}
+
+export interface ModelVariants {
+  id: string;
+  repo: string;
+  downloads: number;
+  likes: number;
+  gated: boolean;
+  variants: VariantFit[];
 }
 
 export interface DownloadedModel {

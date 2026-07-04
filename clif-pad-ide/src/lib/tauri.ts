@@ -512,6 +512,7 @@ import type {
   DownloadProgress,
   ResolvedModel,
   HfModelSummary,
+  ModelVariants,
 } from "../types/localModels";
 
 export async function localDetectHardware(): Promise<HardwareInfo> {
@@ -532,6 +533,14 @@ export async function localModelResolve(
   token?: string | null,
 ): Promise<ResolvedModel> {
   return invoke("local_model_resolve", { id, token: token ?? null });
+}
+
+/** HF-verified detail for one catalog model (popularity + all quant options). */
+export async function localModelVariants(
+  id: string,
+  token?: string | null,
+): Promise<ModelVariants> {
+  return invoke("local_model_variants", { id, token: token ?? null });
 }
 
 /** Search GGUF models on the Hugging Face Hub. */

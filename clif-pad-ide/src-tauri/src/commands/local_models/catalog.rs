@@ -14,6 +14,9 @@ pub struct CatalogModel {
     /// Hugging Face repo holding the GGUF, e.g. "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF".
     pub hf_repo: String,
     pub params_b: f64,
+    /// Active params per token. Equals `params_b` for dense models; much smaller
+    /// for MoE (drives the speed estimate — MoE is fast despite big footprint).
+    pub active_b: f64,
     /// Approx on-disk size in GB — a pre-download ESTIMATE for fit scoring/UI.
     /// The exact size is resolved from the HF API at download/verify time.
     pub size_gb: f64,
@@ -25,6 +28,8 @@ pub struct CatalogModel {
     /// "reasoning" | "agentic" | "autocomplete" | "general"
     pub role: String,
     pub swe_note: String,
+    /// Relative coding capability, 0-100 (curated). Higher = stronger.
+    pub capability: u32,
 }
 
 /// Fit verdict for a model against detected RAM.
@@ -35,20 +40,28 @@ pub struct CatalogEntry {
     /// "comfortable" | "good" | "slow" | "too_large"
     pub fit: String,
     pub fit_label: String,
+    /// "very_fast" | "fast" | "moderate" | "slower" — from active params vs RAM.
+    pub speed: String,
+    pub speed_label: String,
     pub downloaded: bool,
     pub active: bool,
+    /// Exactly one entry is flagged the best pick for this machine.
+    pub recommended: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn m(
     id: &str,
     name: &str,
     repo: &str,
     params_b: f64,
+    active_b: f64,
     size_gb: f64,
     quant: &str,
     min_ram_gb: f64,
     context: u32,
     role: &str,
+    capability: u32,
     swe_note: &str,
 ) -> CatalogModel {
     CatalogModel {
@@ -56,11 +69,13 @@ fn m(
         name: name.into(),
         hf_repo: repo.into(),
         params_b,
+        active_b,
         size_gb,
         quant: quant.into(),
         min_ram_gb,
         context,
         role: role.into(),
+        capability,
         swe_note: swe_note.into(),
     }
 }
@@ -72,48 +87,48 @@ pub fn all() -> Vec<CatalogModel> {
             "qwen3-coder-30b-a3b",
             "Qwen3-Coder 30B-A3B (MoE)",
             "Qwen/Qwen3-Coder-30B-A3B-Instruct-GGUF",
-            30.0, 17.0, "Q4_K_M", 24.0, 32768,
-            "agentic",
+            30.0, 3.0, 17.0, "Q4_K_M", 24.0, 32768,
+            "agentic", 90,
             "Default Mac coding model — 30B memory, ~3B active. Fast + strong.",
-        ),
-        m(
-            "devstral-small-2",
-            "Devstral Small 2 (24B)",
-            "mistralai/Devstral-Small-2507-GGUF",
-            24.0, 14.0, "Q4_K_M", 24.0, 32768,
-            "agentic",
-            "Mistral's agentic coding model. ~68% SWE-bench Verified.",
         ),
         m(
             "qwen2.5-coder-32b",
             "Qwen2.5-Coder 32B",
             "Qwen/Qwen2.5-Coder-32B-Instruct-GGUF",
-            32.0, 19.0, "Q4_K_M", 32.0, 32768,
-            "reasoning",
+            32.0, 32.0, 19.0, "Q4_K_M", 32.0, 32768,
+            "reasoning", 88,
             "Heavy dense reasoning; rivals frontier-cloud on many coding tasks.",
+        ),
+        m(
+            "devstral-small-2",
+            "Devstral Small 2 (24B)",
+            "mistralai/Devstral-Small-2507-GGUF",
+            24.0, 24.0, 14.0, "Q4_K_M", 24.0, 32768,
+            "agentic", 82,
+            "Mistral's agentic coding model. ~68% SWE-bench Verified.",
         ),
         m(
             "qwen2.5-coder-14b",
             "Qwen2.5-Coder 14B",
             "Qwen/Qwen2.5-Coder-14B-Instruct-GGUF",
-            14.0, 9.0, "Q4_K_M", 16.0, 32768,
-            "general",
+            14.0, 14.0, 9.0, "Q4_K_M", 16.0, 32768,
+            "general", 74,
             "Strong mid-tier; good balance of quality and footprint.",
         ),
         m(
             "qwen2.5-coder-7b",
             "Qwen2.5-Coder 7B",
             "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF",
-            7.0, 4.5, "Q4_K_M", 16.0, 32768,
-            "general",
+            7.0, 7.0, 4.5, "Q4_K_M", 16.0, 32768,
+            "general", 64,
             "Runs almost anywhere; solid general coding for its size.",
         ),
         m(
             "qwen2.5-coder-3b",
             "Qwen2.5-Coder 3B",
             "Qwen/Qwen2.5-Coder-3B-Instruct-GGUF",
-            3.0, 2.0, "Q4_K_M", 8.0, 32768,
-            "autocomplete",
+            3.0, 3.0, 2.0, "Q4_K_M", 8.0, 32768,
+            "autocomplete", 48,
             "Tiny + fast — best for fill-in-middle / autocomplete.",
         ),
     ]
@@ -121,6 +136,20 @@ pub fn all() -> Vec<CatalogModel> {
 
 pub fn find(id: &str) -> Option<CatalogModel> {
     all().into_iter().find(|m| m.id == id)
+}
+
+/// Speed estimate from active params (MoE-aware). Honest + qualitative — we
+/// don't fake a tok/s number, since real throughput depends on the engine.
+pub fn speed_for(active_b: f64) -> (&'static str, &'static str) {
+    if active_b <= 3.5 {
+        ("very_fast", "Very fast")
+    } else if active_b <= 9.0 {
+        ("fast", "Fast")
+    } else if active_b <= 16.0 {
+        ("moderate", "Moderate")
+    } else {
+        ("slower", "Slower")
+    }
 }
 
 /// Compute a fit verdict from the model's working-set vs. detected RAM.

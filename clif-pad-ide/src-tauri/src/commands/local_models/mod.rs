@@ -17,6 +17,29 @@ use hf::HfModelSummary;
 use serde::Serialize;
 use tauri::AppHandle;
 
+/// One downloadable quant of a model, with real HF size + hardware fit.
+#[derive(Serialize)]
+pub struct VariantFit {
+    pub filename: String,
+    pub quant: String,
+    pub size_bytes: u64,
+    pub fit: String,
+    pub fit_label: String,
+    /// True for the quant matching the catalog's recommended `quant`.
+    pub recommended: bool,
+}
+
+/// Full HF-verified detail for one catalog model: popularity + all quant options.
+#[derive(Serialize)]
+pub struct ModelVariants {
+    pub id: String,
+    pub repo: String,
+    pub downloads: u64,
+    pub likes: u64,
+    pub gated: bool,
+    pub variants: Vec<VariantFit>,
+}
+
 #[derive(Serialize)]
 pub struct DownloadedModel {
     pub id: String,
@@ -41,8 +64,9 @@ pub fn local_detect_hardware() -> Result<HardwareInfo, String> {
     Ok(hardware::detect())
 }
 
-/// The curated catalog, annotated with hardware fit + download/active state.
-/// Sorted best-fit first so good recommendations float to the top.
+/// The curated catalog, annotated with hardware fit + speed + download/active
+/// state, and exactly one "recommended" pick for this machine. Sorted best-fit
+/// first so good recommendations float to the top.
 #[tauri::command]
 pub fn local_models_catalog() -> Result<Vec<CatalogEntry>, String> {
     let hw = hardware::detect();
@@ -54,15 +78,33 @@ pub fn local_models_catalog() -> Result<Vec<CatalogEntry>, String> {
             let downloaded = store::is_downloaded(&model.id);
             let is_active = active.as_deref() == Some(model.id.as_str());
             let (fit, fit_label) = catalog::fit_for(model.size_gb, hw.total_ram_gb);
+            let (speed, speed_label) = catalog::speed_for(model.active_b);
             CatalogEntry {
                 model,
                 fit: fit.to_string(),
                 fit_label: fit_label.to_string(),
+                speed: speed.to_string(),
+                speed_label: speed_label.to_string(),
                 downloaded,
                 active: is_active,
+                recommended: false,
             }
         })
         .collect();
+
+    // Recommend the strongest model that fits well (comfortable/good). Fall back
+    // to the best-fitting one if nothing fits comfortably.
+    let best = entries
+        .iter()
+        .filter(|e| e.fit == "comfortable" || e.fit == "good")
+        .max_by_key(|e| e.model.capability)
+        .or_else(|| entries.iter().min_by_key(|e| fit_rank(&e.fit)))
+        .map(|e| e.model.id.clone());
+    if let Some(best_id) = best {
+        for e in entries.iter_mut() {
+            e.recommended = e.model.id == best_id;
+        }
+    }
 
     entries.sort_by_key(|e| fit_rank(&e.fit));
     Ok(entries)
@@ -113,6 +155,48 @@ pub async fn local_model_resolve(id: String, token: Option<String>) -> Result<Re
         repo: model.hf_repo,
         filename: file.filename,
         size_bytes: file.size_bytes,
+    })
+}
+
+/// HF-verified detail for one catalog model: popularity + every quant option
+/// with real sizes and per-quant hardware fit. Powers the full-screen detail
+/// view. No token required for public repos.
+#[tauri::command]
+pub async fn local_model_variants(id: String, token: Option<String>) -> Result<ModelVariants, String> {
+    let model = catalog::find(&id).ok_or_else(|| format!("unknown model: {id}"))?;
+    let hw = hardware::detect();
+
+    // Popularity is best-effort — if it fails, still return quants.
+    let info = hf::model_info(&model.hf_repo, &token)
+        .await
+        .unwrap_or(hf::HfModelInfo { downloads: 0, likes: 0, gated: false });
+
+    let want_quant = model.quant.to_lowercase();
+    let variants = hf::list_variants(&model.hf_repo, &token)
+        .await?
+        .into_iter()
+        .map(|v| {
+            let size_gb = v.size_bytes as f64 / 1_000_000_000.0;
+            let (fit, fit_label) = catalog::fit_for(size_gb, hw.total_ram_gb);
+            let recommended = v.quant.to_lowercase() == want_quant;
+            VariantFit {
+                filename: v.filename,
+                quant: v.quant,
+                size_bytes: v.size_bytes,
+                fit: fit.to_string(),
+                fit_label: fit_label.to_string(),
+                recommended,
+            }
+        })
+        .collect();
+
+    Ok(ModelVariants {
+        id: model.id,
+        repo: model.hf_repo,
+        downloads: info.downloads,
+        likes: info.likes,
+        gated: info.gated,
+        variants,
     })
 }
 

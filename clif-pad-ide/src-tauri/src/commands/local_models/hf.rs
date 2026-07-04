@@ -35,6 +35,31 @@ pub struct HfFile {
     pub size_bytes: u64,
 }
 
+#[derive(Serialize, Clone)]
+pub struct HfVariant {
+    pub filename: String,
+    /// Parsed quant label, e.g. "Q4_K_M" (best-effort from the filename).
+    pub quant: String,
+    pub size_bytes: u64,
+}
+
+#[derive(Deserialize)]
+struct ModelInfoResp {
+    #[serde(default)]
+    downloads: u64,
+    #[serde(default)]
+    likes: u64,
+    #[serde(default)]
+    gated: serde_json::Value,
+}
+
+#[derive(Serialize, Clone)]
+pub struct HfModelInfo {
+    pub downloads: u64,
+    pub likes: u64,
+    pub gated: bool,
+}
+
 #[derive(Deserialize)]
 struct SearchItem {
     id: String,
@@ -120,6 +145,67 @@ pub async fn list_gguf_files(repo: &str, token: &Option<String>) -> Result<Vec<H
 
     files.sort_by(|a, b| a.filename.cmp(&b.filename));
     Ok(files)
+}
+
+/// Parse a quant label out of a GGUF filename, e.g. "…-q4_k_m.gguf" -> "Q4_K_M".
+pub fn parse_quant(filename: &str) -> String {
+    let lower = filename.to_lowercase();
+    // Common GGUF quant tokens, longest-first so Q4_K_M beats Q4_K / Q4.
+    const TOKENS: &[&str] = &[
+        "iq1_s", "iq2_xxs", "iq2_xs", "iq2_s", "iq3_xxs", "iq3_s", "iq4_xs", "iq4_nl",
+        "q2_k", "q3_k_s", "q3_k_m", "q3_k_l", "q4_k_s", "q4_k_m", "q5_k_s", "q5_k_m",
+        "q4_0", "q4_1", "q5_0", "q5_1", "q6_k", "q8_0", "f16", "bf16", "f32",
+    ];
+    let mut best = "";
+    for t in TOKENS {
+        if lower.contains(t) && t.len() > best.len() {
+            best = t;
+        }
+    }
+    if best.is_empty() {
+        "GGUF".to_string()
+    } else {
+        best.to_uppercase()
+    }
+}
+
+/// All GGUF variants in a repo (single-file only), each with parsed quant + size.
+pub async fn list_variants(repo: &str, token: &Option<String>) -> Result<Vec<HfVariant>, String> {
+    let files = list_gguf_files(repo, token).await?;
+    let mut variants: Vec<HfVariant> = files
+        .into_iter()
+        // Skip sharded multi-part GGUF for v1.
+        .filter(|f| !f.filename.to_lowercase().contains("-of-"))
+        .map(|f| HfVariant {
+            quant: parse_quant(&f.filename),
+            filename: f.filename,
+            size_bytes: f.size_bytes,
+        })
+        .collect();
+    // Smaller (more quantized) first.
+    variants.sort_by_key(|v| v.size_bytes);
+    Ok(variants)
+}
+
+/// Fetch popularity + gated status for a repo.
+pub async fn model_info(repo: &str, token: &Option<String>) -> Result<HfModelInfo, String> {
+    let url = format!("{API}/models/{}", repo.trim_matches('/'));
+    let client = reqwest::Client::new();
+    let resp = with_auth(client.get(&url), token)
+        .send()
+        .await
+        .map_err(|e| format!("HF info request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("HF info HTTP {} for '{}'", resp.status(), repo));
+    }
+    let info: ModelInfoResp = resp.json().await.map_err(|e| format!("parse HF info: {e}"))?;
+    // `gated` is `false` or a string like "auto"/"manual".
+    let gated = !matches!(info.gated, serde_json::Value::Bool(false) | serde_json::Value::Null);
+    Ok(HfModelInfo {
+        downloads: info.downloads,
+        likes: info.likes,
+        gated,
+    })
 }
 
 /// Resolve the single GGUF file matching a quant preference (e.g. "Q4_K_M").

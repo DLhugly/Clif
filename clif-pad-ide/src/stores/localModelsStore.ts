@@ -3,6 +3,7 @@ import {
   localDetectHardware,
   localModelsCatalog,
   localModelResolve,
+  localModelVariants,
   localModelDownload,
   localModelDelete,
   localModelSetActive,
@@ -13,6 +14,7 @@ import type {
   CatalogEntry,
   DownloadProgress,
   ResolvedModel,
+  ModelVariants,
 } from "../types/localModels";
 
 const [hardware, setHardware] = createSignal<HardwareInfo | null>(null);
@@ -26,6 +28,13 @@ const [progress, setProgress] = createSignal<Record<string, number>>({});
 // id -> resolved HF file (exact filename + real size), once verified
 const [resolved, setResolved] = createSignal<Record<string, ResolvedModel>>({});
 const [verifying, setVerifying] = createSignal(false);
+
+// id -> full HF variant detail (popularity + quant options), lazily fetched
+const [variants, setVariants] = createSignal<Record<string, ModelVariants>>({});
+const [variantsLoading, setVariantsLoading] = createSignal<Record<string, boolean>>({});
+
+// The model whose detail view is open in the full-screen experience.
+const [selectedId, setSelectedId] = createSignal<string | null>(null);
 
 let progressListenerStarted = false;
 
@@ -106,6 +115,26 @@ async function verifyOnHf() {
   setVerifying(false);
 }
 
+/** Lazily fetch HF variant detail (popularity + quant options) for one model. */
+async function loadVariants(id: string, force = false) {
+  if (!force && variants()[id]) return;
+  setVariantsLoading((p) => ({ ...p, [id]: true }));
+  try {
+    const v = await localModelVariants(id);
+    setVariants((p) => ({ ...p, [id]: v }));
+  } catch (e) {
+    setError(String(e));
+  } finally {
+    setVariantsLoading((p) => ({ ...p, [id]: false }));
+  }
+}
+
+/** Open a model's detail view and fetch its HF data. */
+function select(id: string | null) {
+  setSelectedId(id);
+  if (id) void loadVariants(id);
+}
+
 async function remove(id: string) {
   setError(null);
   try {
@@ -134,8 +163,13 @@ export {
   progress,
   resolved,
   verifying,
+  variants,
+  variantsLoading,
+  selectedId,
   refresh,
   verifyOnHf,
+  loadVariants,
+  select,
   download,
   remove,
   setActive,

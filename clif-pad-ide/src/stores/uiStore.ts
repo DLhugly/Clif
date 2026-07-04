@@ -45,7 +45,6 @@ const [visiblePanels, setVisiblePanels] = createSignal<Set<Panel>>(
 const [terminalHeight, setTerminalHeight] = createSignal(30);
 const [sidebarWidth, setSidebarWidth] = createSignal(240);
 const [agentWidth, setAgentWidth] = createSignal(380);
-const [localModelsWidth, setLocalModelsWidth] = createSignal(480);
 
 // Clamp panel width to ensure it doesn't push other panels off screen
 export function clampPanelWidth(
@@ -219,8 +218,6 @@ export {
   setSidebarWidth,
   agentWidth,
   setAgentWidth,
-  localModelsWidth,
-  setLocalModelsWidth,
 
   // Theme
   theme,

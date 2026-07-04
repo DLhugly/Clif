@@ -181,6 +181,7 @@ pub fn run() {
             commands::local_models::local_models_catalog,
             commands::local_models::local_models_list,
             commands::local_models::local_model_resolve,
+            commands::local_models::local_model_variants,
             commands::local_models::local_models_search,
             commands::local_models::local_model_download,
             commands::local_models::local_model_delete,
