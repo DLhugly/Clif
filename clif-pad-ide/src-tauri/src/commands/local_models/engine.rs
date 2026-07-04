@@ -62,8 +62,19 @@ impl Engine {
 
     /// Generate a completion for `prompt` (non-streaming). Proves the model runs
     /// in-process; the streaming + tool-call path wires in next.
-    #[allow(deprecated)]
     pub fn generate(&self, prompt: &str, max_tokens: i32) -> Result<String, String> {
+        self.generate_timed(prompt, max_tokens).map(|r| r.0)
+    }
+
+    /// Like `generate`, but also returns (generated_token_count, decode_seconds)
+    /// for benchmarking — decode_seconds covers only the generation loop, not the
+    /// prompt prefill, so `count / seconds` is the steady-state tokens/sec.
+    #[allow(deprecated)]
+    pub fn generate_timed(
+        &self,
+        prompt: &str,
+        max_tokens: i32,
+    ) -> Result<(String, usize, f64), String> {
         let slot = self.loaded.lock().map_err(|_| "engine lock poisoned")?;
         let (_, lm) = slot.as_ref().ok_or("no model loaded")?;
         let model = &lm.model;
@@ -90,6 +101,8 @@ impl Engine {
         let mut sampler = LlamaSampler::greedy();
         let mut n_cur = batch.n_tokens();
         let mut out = String::new();
+        let mut generated = 0usize;
+        let start = std::time::Instant::now();
 
         while n_cur < max_tokens {
             let token = sampler.sample(&ctx, batch.n_tokens() - 1);
@@ -101,6 +114,7 @@ impl Engine {
                 .token_to_str(token, Special::Tokenize)
                 .unwrap_or_default();
             out.push_str(&piece);
+            generated += 1;
 
             batch.clear();
             batch
@@ -110,7 +124,7 @@ impl Engine {
             n_cur += 1;
         }
 
-        Ok(out)
+        Ok((out, generated, start.elapsed().as_secs_f64()))
     }
 }
 
@@ -138,5 +152,34 @@ mod tests {
             .expect("generate");
         println!("\n=== MODEL OUTPUT ===\n{out}\n=== END OUTPUT ===\n");
         assert!(!out.trim().is_empty(), "expected non-empty generation");
+    }
+
+    /// Steady-state generation speed (tokens/sec), excluding model load + prefill.
+    ///   SMOKE_GGUF=/path/to/model.gguf \
+    ///     cargo test --lib engine::tests::bench_speed -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn bench_speed() {
+        let path = std::env::var("SMOKE_GGUF").expect("set SMOKE_GGUF to a .gguf path");
+        let eng = Engine::new().expect("engine init");
+
+        let t0 = std::time::Instant::now();
+        eng.load("bench", Path::new(&path), 2048).expect("load model");
+        let load_s = t0.elapsed().as_secs_f64();
+
+        let (_out, n, gen_s) = eng
+            .generate_timed(
+                "Explain, in detail, how ownership and borrowing work in Rust.",
+                200,
+            )
+            .expect("generate");
+
+        let tps = n as f64 / gen_s;
+        println!("\n=== SPEED ===");
+        println!("model load:   {load_s:.1}s");
+        println!("generated:    {n} tokens in {gen_s:.2}s");
+        println!("throughput:   {tps:.1} tokens/sec");
+        println!("=== END SPEED ===\n");
+        assert!(n > 0);
     }
 }
