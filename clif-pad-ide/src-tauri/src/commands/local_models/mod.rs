@@ -5,6 +5,7 @@
 //! guessed. Inference runs in-process via `engine::Engine` (llama.cpp / GGUF).
 
 mod catalog;
+mod dialect;
 mod download;
 mod engine;
 mod hardware;
@@ -13,6 +14,7 @@ mod scan;
 mod store;
 
 use catalog::CatalogEntry;
+pub use dialect::Dialect;
 use hardware::HardwareInfo;
 use hf::HfModelSummary;
 use serde::Serialize;
@@ -47,28 +49,88 @@ pub fn resolve_local_path(model: &str) -> Option<std::path::PathBuf> {
     store::downloaded_file(model)
 }
 
-/// Stream one turn from a local model into `on_token`. Loads the model on first
-/// use (cached by path), applies the model's own chat template, and generates.
-/// Used by the agent loop for `provider == "local"`.
-pub fn stream_local_turn(
-    model: &str,
-    messages: &[(String, String)],
-    max_tokens: i32,
-    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
-    on_token: &mut dyn FnMut(&str),
-) -> Result<(), String> {
+/// What one local turn cost, so the UI can show tokens + real throughput.
+pub struct LocalTurnStats {
+    /// Everything the model generated this turn, including any tool-call markup.
+    pub text: String,
+    /// Tool calls in the model's OWN native format, already parsed. The generic
+    /// `<tool_call>`+JSON protocol is parsed by the agent loop on top of this.
+    pub tool_calls: Vec<(String, serde_json::Value)>,
+    pub dialect: Dialect,
+    pub prompt_tokens: usize,
+    pub completion_tokens: usize,
+    /// The context window actually in use — derived from RAM + model geometry.
+    pub n_ctx: u32,
+    pub tokens_per_sec: f64,
+    /// True when this turn had to load the weights from disk first (slow path).
+    pub loaded_from_disk: bool,
+}
+
+/// Load the model (if needed) and report the dialect it speaks, so the caller can
+/// frame tool instructions and hide the right markup while streaming.
+pub fn ensure_loaded(model: &str) -> Result<Dialect, String> {
     let path = resolve_local_path(model)
         .ok_or_else(|| format!("local model '{model}' not found on disk"))?;
     let key = path.to_string_lossy().to_string();
 
     let eng = engine()?;
     if eng.loaded_id().as_deref() != Some(key.as_str()) {
-        // Generous context for the agent system prompt; capped for memory.
-        eng.load(&key, &path, 8192)?;
+        // Ceiling only — the engine sizes the real window from the model's KV
+        // geometry and this machine's RAM. Don't hardcode a context here.
+        eng.load(&key, &path, u32::MAX)?;
     }
+    eng.dialect().ok_or_else(|| "no model loaded".to_string())
+}
+
+/// Stream one turn from a local model into `on_token`. Loads the model on first
+/// use (cached by path), renders the prompt in the model's own dialect, stops at
+/// that dialect's end markers, and parses any tool calls back out.
+pub fn stream_local_turn(
+    model: &str,
+    messages: &[(String, String)],
+    max_tokens: i32,
+    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    on_token: &mut dyn FnMut(&str),
+) -> Result<LocalTurnStats, String> {
+    let path = resolve_local_path(model)
+        .ok_or_else(|| format!("local model '{model}' not found on disk"))?;
+    let key = path.to_string_lossy().to_string();
+
+    let eng = engine()?;
+    let mut loaded_from_disk = false;
+    if eng.loaded_id().as_deref() != Some(key.as_str()) {
+        eng.load(&key, &path, u32::MAX)?;
+        loaded_from_disk = true;
+    }
+    let n_ctx = eng.loaded_ctx().unwrap_or(0);
+    let dialect = eng.dialect().unwrap_or(Dialect::ChatMl);
+    let stop = dialect.stop_sequences();
     let prompt = eng.apply_template(messages)?;
-    eng.generate_stream(&prompt, max_tokens, cancel, on_token)?;
-    Ok(())
+
+    let mut text = String::new();
+    let (prompt_tokens, completion_tokens, secs) =
+        eng.generate_stream(&prompt, max_tokens, &stop, cancel, &mut |piece| {
+            text.push_str(piece);
+            on_token(piece);
+        })?;
+
+    // Native (dialect-specific) tool calls, parsed here where we know the model.
+    let tool_calls = dialect::parse_gemma4_tool_calls(&text);
+
+    Ok(LocalTurnStats {
+        text,
+        tool_calls,
+        dialect,
+        prompt_tokens,
+        completion_tokens,
+        n_ctx,
+        tokens_per_sec: if secs > 0.0 {
+            completion_tokens as f64 / secs
+        } else {
+            0.0
+        },
+        loaded_from_disk,
+    })
 }
 
 /// One downloadable quant of a model, with real HF size + hardware fit.
@@ -346,11 +408,9 @@ pub async fn local_engine_generate(
         if eng.loaded_id().as_deref() != Some(active.as_str()) {
             let path = store::downloaded_file(&active)
                 .ok_or_else(|| format!("active model '{active}' is not downloaded"))?;
-            let n_ctx = catalog::find(&active)
-                .map(|m| m.context)
-                .unwrap_or(4096)
-                .min(8192);
-            eng.load(&active, &path, n_ctx)?;
+            // Catalog context is a ceiling; the engine fits the real window to RAM.
+            let cap = catalog::find(&active).map(|m| m.context).unwrap_or(u32::MAX);
+            eng.load(&active, &path, cap)?;
         }
         eng.generate(&prompt, max_tokens.unwrap_or(256))
     })

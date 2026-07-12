@@ -568,7 +568,7 @@ fn context_files_from_json(context: Option<&str>) -> Vec<String> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AgentMode {
+pub(crate) enum AgentMode {
     Agent,
     Ask,
     Plan,
@@ -1138,8 +1138,25 @@ fn resolve_path(path: &str, workspace_dir: &str) -> String {
 }
 
 fn workspace_root(workspace_dir: &str) -> Result<PathBuf, String> {
-    std::fs::canonicalize(workspace_dir)
-        .map_err(|e| format!("Failed to resolve workspace root '{}': {}", workspace_dir, e))
+    std::fs::canonicalize(workspace_dir).map_err(|e| {
+        // Distinguish "the folder is gone" from "the path escapes the workspace".
+        // Reporting a missing project as PATH_OUTSIDE_WORKSPACE sends the model
+        // hunting for a permissions bug that doesn't exist.
+        if !Path::new(workspace_dir).exists() {
+            format!(
+                "The open project folder '{workspace_dir}' no longer exists. \
+                 Open a folder in ClifPad (File → Open Folder) before using file tools."
+            )
+        } else {
+            format!("Failed to resolve workspace root '{workspace_dir}': {e}")
+        }
+    })
+}
+
+/// True when there is a usable project folder open. Checked once per turn so we can
+/// fail fast with an actionable message instead of letting every tool call fail.
+fn workspace_is_valid(workspace_dir: &str) -> bool {
+    !workspace_dir.trim().is_empty() && Path::new(workspace_dir).is_dir()
 }
 
 fn canonicalize_existing_path(path: &Path) -> Result<PathBuf, String> {
@@ -1563,11 +1580,10 @@ fn build_workspace_snapshot(workspace_dir: &str) -> String {
     lines.join("\n")
 }
 
-/// Get the provider URL. Local providers point at each tool's OpenAI-compatible
-/// server (must be running); everything else defaults to OpenRouter.
+/// Get the provider URL. `local` is handled earlier via the embedded engine
+/// and never reaches this function; everything else defaults to OpenRouter.
 fn get_provider_url(provider: &str) -> String {
     match provider {
-        "ollama" => "http://localhost:11434/v1/chat/completions".to_string(),
         "lmstudio" => "http://localhost:1234/v1/chat/completions".to_string(),
         _ => "https://openrouter.ai/api/v1/chat/completions".to_string(),
     }
@@ -1678,22 +1694,404 @@ pub async fn agent_chat(
     Ok(())
 }
 
-/// Stream one turn from a local model (embedded llama.cpp engine) into the same
-/// `agent_stream` events the frontend already consumes. Single-shot text; no
-/// tool loop yet. `model` is a catalog id or an absolute path to a .gguf.
+const TOOL_OPEN: &str = "<tool_call>";
+const TOOL_CLOSE: &str = "</tool_call>";
+
+/// Streams assistant prose to the UI while withholding everything that is protocol
+/// rather than prose: tool-call markup, and the model's internal reasoning channel.
+///
+/// Two kinds of markup, handled differently:
+///   - a tool-call opener (`<tool_call>`, `<|tool_call>`) suppresses to END of turn;
+///   - a hidden SPAN (`<|channel>…<channel|>`, `<think>…</think>`) suppresses only
+///     until its close marker, after which prose resumes.
+///
+/// Markers routinely straddle token boundaries, so the tail is held back until we
+/// know it isn't the start of one — no partial `<tool_ca` or `<|chan` can leak.
+struct ToolCallStreamFilter {
+    raw: String,
+    emitted: usize,
+    /// Set once a tool call begins: nothing more is prose this turn.
+    suppressed: bool,
+    /// Close marker we're currently skipping toward, if inside a hidden span.
+    inside: Option<&'static str>,
+    openers: Vec<&'static str>,
+    spans: Vec<(&'static str, &'static str)>,
+}
+
+impl ToolCallStreamFilter {
+    fn new(openers: Vec<&'static str>, spans: Vec<(&'static str, &'static str)>) -> Self {
+        Self { raw: String::new(), emitted: 0, suppressed: false, inside: None, openers, spans }
+    }
+
+    /// Longest marker we might be mid-way through — how much tail to withhold.
+    fn holdback(&self) -> usize {
+        self.openers
+            .iter()
+            .copied()
+            .chain(self.spans.iter().flat_map(|(o, c)| [*o, *c]))
+            .map(str::len)
+            .max()
+            .unwrap_or(1)
+            .saturating_sub(1)
+    }
+
+    /// Feed one generated piece; returns the slice that is safe to show.
+    fn push(&mut self, piece: &str) -> Option<String> {
+        self.raw.push_str(piece);
+        let mut out = String::new();
+
+        loop {
+            if self.suppressed {
+                break;
+            }
+
+            // Inside a reasoning span: skip forward to its close, then resume prose.
+            if let Some(close) = self.inside {
+                match self.raw[self.emitted..].find(close) {
+                    Some(rel) => {
+                        self.emitted += rel + close.len();
+                        self.inside = None;
+                        continue;
+                    }
+                    None => break,
+                }
+            }
+
+            let tail = &self.raw[self.emitted..];
+
+            // Earliest tool-call opener vs. earliest hidden-span opener.
+            let tool_at = self.openers.iter().filter_map(|o| tail.find(o)).min();
+            let span_at = self
+                .spans
+                .iter()
+                .filter_map(|(o, c)| tail.find(o).map(|i| (i, *o, *c)))
+                .min_by_key(|(i, _, _)| *i);
+
+            // Whichever marker comes first wins. A tool call ends the prose; a hidden
+            // span is merely skipped over.
+            let tool_first = match (tool_at, span_at) {
+                (Some(t), Some((i, _, _))) => Some(t <= i),
+                (Some(_), None) => Some(true),
+                (None, Some(_)) => Some(false),
+                (None, None) => None,
+            };
+
+            match tool_first {
+                Some(true) => {
+                    let t = tool_at.expect("tool_at is Some when tool_first is true");
+                    out.push_str(&tail[..t]);
+                    self.emitted += t;
+                    self.suppressed = true;
+                    break;
+                }
+                Some(false) => {
+                    let (i, open, close) =
+                        span_at.expect("span_at is Some when tool_first is false");
+                    out.push_str(&tail[..i]);
+                    self.emitted += i + open.len();
+                    self.inside = Some(close);
+                    continue;
+                }
+                None => {
+                    // No marker in sight — emit all but the held-back tail.
+                    let mut safe = self.raw.len().saturating_sub(self.holdback());
+                    while safe > self.emitted && !self.raw.is_char_boundary(safe) {
+                        safe -= 1;
+                    }
+                    if safe > self.emitted {
+                        out.push_str(&self.raw[self.emitted..safe]);
+                        self.emitted = safe;
+                    }
+                    break;
+                }
+            }
+        }
+
+        (!out.is_empty()).then_some(out)
+    }
+
+    /// Flush the held-back tail once generation stops.
+    fn finish(&mut self) -> Option<String> {
+        if self.suppressed || self.inside.is_some() || self.emitted >= self.raw.len() {
+            return None;
+        }
+
+        // Generation can stop mid-marker (token cap, cancel, EOG). A trailing partial
+        // marker is markup, not prose — drop it rather than leak it.
+        let markers: Vec<&str> = self
+            .openers
+            .iter()
+            .copied()
+            .chain(self.spans.iter().map(|(o, _)| *o))
+            .collect();
+
+        let mut end = self.raw.len();
+        'outer: for n in (1..=self.holdback()).rev() {
+            if n > end {
+                continue;
+            }
+            if let Some(tail) = self.raw.get(end - n..end) {
+                if markers.iter().any(|m| m.starts_with(tail)) {
+                    end -= n;
+                    break 'outer;
+                }
+            }
+        }
+
+        let start = self.emitted;
+        self.emitted = self.raw.len();
+        if end <= start {
+            return None;
+        }
+        Some(self.raw[start..end].to_string())
+    }
+}
+
+/// The tool protocol we teach local models. Cloud APIs parse tool calls for us;
+/// llama.cpp hands back raw tokens, so we define the contract in the prompt and
+/// parse it back out ourselves. `<tool_call>`+JSON is the Qwen/Hermes convention
+/// and the most widely recognised across open GGUF models.
+pub(crate) fn local_tool_instructions(mode: AgentMode) -> String {
+    let mut s = String::from(
+        "# Tool calling\n\n\
+         You can call tools to inspect and modify the user's codebase. To call a tool, \
+         emit EXACTLY this form and then STOP:\n\n\
+         <tool_call>\n\
+         {\"name\": \"read_file\", \"arguments\": {\"path\": \"src/main.rs\"}}\n\
+         </tool_call>\n\n\
+         Rules:\n\
+         - Emit ONE tool call at a time, then stop and wait. The result comes back to you \
+         in a <tool_response> block.\n\
+         - `arguments` MUST be a JSON object matching that tool's schema exactly. Never invent \
+         argument names.\n\
+         - Write no prose in the same message as a tool call.\n\
+         - Always read a file before editing it.\n\
+         - When the task is done and you need no more tools, reply with plain prose and NO \
+         <tool_call> block. That ends your turn.\n\n\
+         ## Available tools\n",
+    );
+
+    for tool in tool_definitions() {
+        let Some(f) = tool.get("function") else { continue };
+        let name = f.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+        // Mode restrictions are enforced in execute_tool, but a model that never
+        // sees a forbidden tool won't waste slow local tokens trying to call it.
+        if mode != AgentMode::Agent && matches!(name, "write_file" | "edit_file" | "run_command") {
+            continue;
+        }
+        let desc = f.get("description").and_then(|v| v.as_str()).unwrap_or_default();
+        let params = f
+            .get("parameters")
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| "{}".to_string());
+        s.push_str(&format!("\n### {name}\n{desc}\nJSON Schema for `arguments`: {params}\n"));
+    }
+    s
+}
+
+/// A tool call recovered from raw model output.
+struct LocalToolCall {
+    name: String,
+    args: serde_json::Value,
+}
+
+/// Pull `<tool_call>` bodies out of model output. Falls back to fenced ```json
+/// blocks, because a model that ignores the tag convention usually still emits
+/// the right JSON — better to honour it than to fail the turn.
+fn extract_tool_blocks(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(TOOL_OPEN) {
+        let after = &rest[start + TOOL_OPEN.len()..];
+        let (body, next) = match after.find(TOOL_CLOSE) {
+            Some(end) => (&after[..end], &after[end + TOOL_CLOSE.len()..]),
+            // Unterminated: the model hit the token cap mid-call. Take the rest
+            // and let the JSON parser decide whether it's salvageable.
+            None => (after, ""),
+        };
+        out.push(body.trim().to_string());
+        if next.is_empty() {
+            break;
+        }
+        rest = next;
+    }
+
+    if out.is_empty() {
+        for block in text.split("```").skip(1).step_by(2) {
+            let body = block.strip_prefix("json").unwrap_or(block).trim();
+            if body.starts_with('{') && body.contains("\"name\"") {
+                out.push(body.to_string());
+            }
+        }
+    }
+    out
+}
+
+fn parse_local_tool_calls(text: &str) -> Vec<LocalToolCall> {
+    extract_tool_blocks(text)
+        .into_iter()
+        .filter_map(|body| {
+            let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+            let name = v.get("name")?.as_str()?.to_string();
+            let args = v
+                .get("arguments")
+                .or_else(|| v.get("parameters"))
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            // Some models emit `arguments` as a JSON-encoded *string*.
+            let args = match args {
+                serde_json::Value::String(s) => {
+                    serde_json::from_str(&s).unwrap_or_else(|_| json!({}))
+                }
+                other => other,
+            };
+            Some(LocalToolCall { name, args })
+        })
+        .collect()
+}
+
+fn tool_status_label(name: &str) -> &'static str {
+    match name {
+        "read_file" => "Reading file...",
+        "write_file" => "Writing file...",
+        "edit_file" => "Editing file...",
+        "list_files" => "Exploring files...",
+        "search" => "Searching codebase...",
+        "find_file" => "Finding file...",
+        "find_symbol" => "Looking up symbol...",
+        "todo_write" => "Updating task list...",
+        "todo_read" => "Reading task list...",
+        "run_command" => "Running command...",
+        _ => "Working...",
+    }
+}
+
+/// Resolves once the user has hit stop.
+async fn wait_for_cancel(cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    use std::sync::atomic::Ordering;
+    while !cancel.load(Ordering::Relaxed) {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+/// Execute one tool call for the local loop, emitting the same events the cloud
+/// loop does so the UI renders local tool calls identically. Honours run_command
+/// approval and cancellation. `None` means the user cancelled.
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_local_tool(
+    app: &tauri::AppHandle,
+    label: &str,
+    session_id: &str,
+    workspace_dir: &str,
+    mode: AgentMode,
+    call_id: &str,
+    name: &str,
+    args: &serde_json::Value,
+    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Option<String> {
+    let args_str = args.to_string();
+    crate::logging::log(
+        "local-agent",
+        &format!("tool start: {name} args={}…", &args_str[..args_str.len().min(200)]),
+    );
+    let _ = app.emit_to(label, "agent_status", tool_status_label(name));
+    let _ = app.emit_to(
+        label,
+        "agent_tool_call",
+        json!({ "id": call_id, "name": name, "arguments": args_str }),
+    );
+
+    let result = if name == "run_command" {
+        // Same guardrail as the cloud path: shell commands need explicit consent.
+        let command_preview = args
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let (approval_tx, approval_rx) = tokio::sync::oneshot::channel::<bool>();
+        {
+            let mut approvals = COMMAND_APPROVALS.lock().unwrap_or_else(|e| e.into_inner());
+            approvals.insert(session_id.to_string(), approval_tx);
+        }
+        let _ = app.emit_to(
+            label,
+            "agent_command_approval",
+            json!({ "session_id": session_id, "command": command_preview, "tool_call_id": call_id }),
+        );
+
+        let approved = tokio::select! {
+            res = approval_rx => res.unwrap_or(false),
+            _ = wait_for_cancel(cancel) => return None,
+        };
+        if !approved {
+            "Command blocked by user.".to_string()
+        } else {
+            tokio::select! {
+                res = execute_tool(name, args, workspace_dir, Some(session_id), mode) => res,
+                _ = wait_for_cancel(cancel) => return None,
+            }
+        }
+    } else {
+        tokio::select! {
+            res = execute_tool(name, args, workspace_dir, Some(session_id), mode) => res,
+            _ = wait_for_cancel(cancel) => return None,
+        }
+    };
+
+    // Keep open tabs / git status / file tree in sync without waiting on the watcher.
+    if matches!(name, "write_file" | "edit_file") {
+        if let Some(path_str) = args.get("path").and_then(|v| v.as_str()) {
+            let abs = std::path::Path::new(workspace_dir)
+                .join(path_str)
+                .to_string_lossy()
+                .to_string();
+            let _ = app.emit_to(label, "file-changed", json!({ "path": abs, "kind": "modify" }));
+        }
+    }
+
+    crate::logging::log(
+        "local-agent",
+        &format!("tool done: {name} → {} chars", result.len()),
+    );
+    let _ = app.emit_to(
+        label,
+        "agent_tool_result",
+        json!({ "tool_call_id": call_id, "result": &result }),
+    );
+    Some(result)
+}
+
+/// Agent loop for local models (embedded llama.cpp engine), with tool calling.
+///
+/// Cloud providers parse tool calls server-side; llama.cpp does not, so we teach
+/// the protocol in the prompt (`local_tool_instructions`), stop generation dead at
+/// `</tool_call>`, parse the call back out, execute it through the same
+/// `execute_tool` the cloud path uses, feed the result back, and loop.
+///
+/// `model` is a catalog id or an absolute path to a .gguf.
 async fn run_local_turn(
     app: tauri::AppHandle,
     label: &str,
+    session_id: &str,
     model: String,
     conversation: Vec<serde_json::Value>,
+    workspace_dir: String,
+    mode: AgentMode,
     cancel_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<(), String> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
+    // Local context windows are small (8k) and local tokens are slow, so tool
+    // results get a much tighter cap than the cloud path's 12k.
+    const MAX_LOCAL_RESULT_CHARS: usize = 4000;
+    // Each round is a full generate; a runaway loop is expensive on-device.
+    const MAX_LOCAL_ROUNDS: usize = 16;
+
     // Flatten OpenAI-style messages to (role, text). Images/tool frames collapse
     // to text; roles the template doesn't know map to "user".
-    let messages: Vec<(String, String)> = conversation
+    let mut messages: Vec<(String, String)> = conversation
         .iter()
         .filter_map(|m| {
             let role = m.get("role")?.as_str()?;
@@ -1714,9 +2112,50 @@ async fn run_local_turn(
         })
         .collect();
 
-    let _ = app.emit_to(label, "agent_status", "Thinking...");
+    // A missing project folder makes every file tool fail. Say so once, plainly,
+    // rather than letting the model burn rounds guessing at the cause.
+    if !workspace_is_valid(&workspace_dir) {
+        crate::logging::log(
+            "local-agent",
+            &format!("workspace missing: {workspace_dir:?}"),
+        );
+        let _ = app.emit_to(
+            label,
+            "agent_stream",
+            format!(
+                "**No project folder is open.** The configured folder `{workspace_dir}` doesn't exist, \
+                 so I can't read, write, or run commands.\n\nOpen a folder (File → Open Folder) and ask me again."
+            ),
+        );
+        let _ = app.emit_to(label, "agent_stream", "[DONE]");
+        return Ok(());
+    }
 
-    // Bridge the cancel oneshot to an atomic the blocking generator can poll.
+    // Load up front so we know which dialect this model speaks before we frame the
+    // prompt or start hiding markup.
+    let dialect = match crate::commands::local_models::ensure_loaded(&model) {
+        Ok(d) => d,
+        Err(e) => {
+            let _ = app.emit_to(label, "agent_stream", format!("\n\n[local engine error: {e}]"));
+            let _ = app.emit_to(label, "agent_stream", "[DONE]");
+            return Ok(());
+        }
+    };
+    let openers = dialect.tool_call_openers();
+    let spans = dialect.hidden_spans();
+
+    // Teach the tool protocol by appending to the system block.
+    let instructions = local_tool_instructions(mode);
+    match messages.first_mut() {
+        Some((role, content)) if role == "system" => {
+            content.push_str("\n\n");
+            content.push_str(&instructions);
+        }
+        _ => messages.insert(0, ("system".to_string(), instructions)),
+    }
+
+    // Bridge the cancel oneshot to an atomic both the blocking generator and the
+    // async tool dispatch can poll.
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_watch = cancel.clone();
     tokio::spawn(async move {
@@ -1724,26 +2163,154 @@ async fn run_local_turn(
         cancel_watch.store(true, Ordering::Relaxed);
     });
 
-    let app_stream = app.clone();
-    let label_stream = label.to_string();
-    let result = tokio::task::spawn_blocking(move || {
-        crate::commands::local_models::stream_local_turn(
-            &model,
-            &messages,
-            1024,
-            &cancel,
-            &mut |piece| {
-                let _ = app_stream.emit_to(&label_stream, "agent_stream", piece);
-            },
-        )
-    })
-    .await
-    .map_err(|e| format!("local engine task failed: {e}"))?;
+    for _round in 0..MAX_LOCAL_ROUNDS {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = app.emit_to(label, "agent_stream", "\n*[Stopped by user]*\n");
+            let _ = app.emit_to(label, "agent_stream", "[DONE]");
+            return Ok(());
+        }
 
-    let _ = app.emit_to(label, "agent_status", "");
-    if let Err(e) = result {
-        let _ = app.emit_to(label, "agent_stream", format!("\n\n[local engine error: {e}]"));
+        crate::logging::log(
+            "local-agent",
+            &format!("round {_round}: {} msgs, dialect={dialect:?}", messages.len()),
+        );
+        let _ = app.emit_to(label, "agent_status", "Thinking...");
+
+        let app_stream = app.clone();
+        let label_stream = label.to_string();
+        let model_turn = model.clone();
+        let msgs_turn = messages.clone();
+        let cancel_turn = cancel.clone();
+        let openers_turn = openers.clone();
+        let spans_turn = spans.clone();
+
+        let result = tokio::task::spawn_blocking(move || {
+            let mut filter = ToolCallStreamFilter::new(openers_turn, spans_turn);
+            let out = crate::commands::local_models::stream_local_turn(
+                &model_turn,
+                &msgs_turn,
+                1024,
+                &cancel_turn,
+                &mut |piece| {
+                    if let Some(visible) = filter.push(piece) {
+                        if !visible.is_empty() {
+                            let _ = app_stream.emit_to(&label_stream, "agent_stream", visible);
+                        }
+                    }
+                },
+            );
+            if let Some(tail) = filter.finish() {
+                if !tail.is_empty() {
+                    let _ = app_stream.emit_to(&label_stream, "agent_stream", tail);
+                }
+            }
+            out
+        })
+        .await
+        .map_err(|e| format!("local engine task failed: {e}"))?;
+
+        let _ = app.emit_to(label, "agent_status", "");
+
+        let stats = match result {
+            Ok(s) => s,
+            Err(e) => {
+                let _ =
+                    app.emit_to(label, "agent_stream", format!("\n\n[local engine error: {e}]"));
+                let _ = app.emit_to(label, "agent_stream", "[DONE]");
+                return Ok(());
+            }
+        };
+
+        // Same shape the cloud path emits, so token accounting is provider-agnostic.
+        let _ = app.emit_to(
+            label,
+            "agent_usage",
+            json!({
+                "prompt_tokens": stats.prompt_tokens,
+                "completion_tokens": stats.completion_tokens,
+                "estimated_context": stats.prompt_tokens + stats.completion_tokens,
+            }),
+        );
+        let _ = app.emit_to(
+            label,
+            "agent_local_stats",
+            json!({
+                "tokens_per_sec": stats.tokens_per_sec,
+                "loaded_from_disk": stats.loaded_from_disk,
+                "n_ctx": stats.n_ctx,
+            }),
+        );
+
+        // Two sources: the model's NATIVE format (parsed by the dialect, since only
+        // it knows the syntax) and the generic `<tool_call>`+JSON protocol we teach
+        // in the prompt. A model will use whichever its training pulls it toward, so
+        // accept both rather than fighting it.
+        let mut calls: Vec<LocalToolCall> = stats
+            .tool_calls
+            .iter()
+            .map(|(name, args)| LocalToolCall { name: name.clone(), args: args.clone() })
+            .collect();
+        if calls.is_empty() {
+            calls = parse_local_tool_calls(&stats.text);
+        }
+
+        if calls.is_empty() {
+            // No tool call — the model answered in prose. Turn over.
+            let _ = app.emit_to(label, "agent_stream", "[DONE]");
+            return Ok(());
+        }
+
+        // Record the model's own call so it sees its history in its native format —
+        // but strip the reasoning channel first. The model's own template drops
+        // thinking from prior turns; replaying it would have the model treat its
+        // scratchpad as committed output.
+        messages.push(("assistant".to_string(), dialect.strip_hidden(&stats.text)));
+
+        for call in calls {
+            let call_id = Uuid::new_v4().to_string();
+            let Some(result) = dispatch_local_tool(
+                &app,
+                label,
+                session_id,
+                &workspace_dir,
+                mode,
+                &call_id,
+                &call.name,
+                &call.args,
+                &cancel,
+            )
+            .await
+            else {
+                let _ = app.emit_to(label, "agent_stream", "\n*[Stopped by user]*\n");
+                let _ = app.emit_to(label, "agent_stream", "[DONE]");
+                return Ok(());
+            };
+
+            let capped = if result.len() > MAX_LOCAL_RESULT_CHARS {
+                let mut cut = MAX_LOCAL_RESULT_CHARS;
+                while cut > 0 && !result.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                format!(
+                    "{}\n\n[... {} chars omitted — use read_file with offset/limit for more ...]",
+                    &result[..cut],
+                    result.len() - cut
+                )
+            } else {
+                result
+            };
+
+            // Feed the result back in the model's own tool-response format, as a user
+            // turn — most open chat templates have no dedicated `tool` role.
+            messages.push(("user".to_string(), dialect.format_tool_response(&call.name, &capped)));
+        }
     }
+
+    let _ = app.emit_to(
+        label,
+        "agent_stream",
+        format!("\n\n*[Stopped after {MAX_LOCAL_ROUNDS} tool rounds — the local model may be looping. Try a more specific request.]*\n"),
+    );
     let _ = app.emit_to(label, "agent_stream", "[DONE]");
     Ok(())
 }
@@ -1770,7 +2337,7 @@ async fn run_agent_loop(
 
     // Build conversation from initial messages
     // For OpenRouter: Use array content with cache_control for 90% cost reduction on cached prompts
-    // For Ollama: Use string content (Ollama doesn't support array content for system messages)
+    // For everything else: plain string content (max compatibility, no caching)
     let use_caching = provider == "openrouter";
     
     let mut conversation: Vec<serde_json::Value> = if use_caching {
@@ -1791,7 +2358,7 @@ async fn run_agent_loop(
             "content": system_parts
         })]
     } else {
-        // Ollama: use simple string format (no caching, but maximum compatibility)
+        // Non-OpenRouter: use simple string format (no caching, but maximum compatibility)
         let conv = vec![json!({
             "role": "system",
             "content": system_prompt,
@@ -1907,11 +2474,35 @@ async fn run_agent_loop(
         }));
     }
 
-    // Local models run in Clif's embedded engine (llama.cpp), not over HTTP.
-    // v1: streaming chat with the model's own chat template. Tool-calling for
-    // local models is a follow-up; the cloud path below keeps full tool support.
+    // Local models run in Clif's embedded engine (llama.cpp), not over HTTP, and
+    // need tool calls parsed out of raw text rather than handed to us by an API.
     if provider == "local" {
-        return run_local_turn(app, label, model, conversation, cancel_rx).await;
+        return run_local_turn(
+            app,
+            label,
+            session_id,
+            model,
+            conversation,
+            workspace_dir,
+            mode,
+            cancel_rx,
+        )
+        .await;
+    }
+
+    // Same guard as the local path: a stale project folder breaks every file tool,
+    // so fail once with an actionable message instead of 200 confusing tool errors.
+    if !workspace_is_valid(&workspace_dir) {
+        let _ = app.emit_to(
+            label,
+            "agent_stream",
+            format!(
+                "**No project folder is open.** The configured folder `{workspace_dir}` doesn't exist, \
+                 so I can't read, write, or run commands.\n\nOpen a folder (File → Open Folder) and ask me again."
+            ),
+        );
+        let _ = app.emit_to(label, "agent_stream", "[DONE]");
+        return Ok(());
     }
 
     let raw_tools = tool_definitions();
@@ -2830,6 +3421,161 @@ fn repair_json(input: &str) -> String {
     }
     
     s
+}
+
+#[cfg(test)]
+mod local_tool_tests {
+    use super::*;
+
+    /// Feed text through the filter one char at a time — the worst case, since it
+    /// splits `<tool_call>` across the maximum number of token boundaries.
+    fn stream_by_char(text: &str) -> String {
+        let mut f = ToolCallStreamFilter::new(
+            vec!["<tool_call>", "<|tool_call>"],
+            vec![("<|channel>", "<channel|>"), ("<think>", "</think>")],
+        );
+        let mut shown = String::new();
+        for ch in text.chars() {
+            if let Some(v) = f.push(&ch.to_string()) {
+                shown.push_str(&v);
+            }
+        }
+        if let Some(tail) = f.finish() {
+            shown.push_str(&tail);
+        }
+        shown
+    }
+
+    /// Gemma 4 emits a reasoning channel. It is a SPAN: prose resumes after it, so
+    /// it must be skipped, not suppress the rest of the turn.
+    #[test]
+    fn filter_hides_thought_channel_and_resumes() {
+        let shown =
+            stream_by_char("<|channel>thought\nI will plan the site.<channel|>Here is the plan.");
+        assert_eq!(shown, "Here is the plan.");
+    }
+
+    #[test]
+    fn filter_hides_think_tags() {
+        assert_eq!(stream_by_char("<think>hmm</think>Answer."), "Answer.");
+    }
+
+    /// The exact leak the user saw: thinking, then a native tool call.
+    #[test]
+    fn filter_hides_thought_then_tool_call() {
+        let shown = stream_by_char(
+            "<|channel>thought\nplanning<channel|>Creating the file.\
+             <|tool_call>call:write_file{path:<|\"|>a.html<|\"|>}<tool_call|>",
+        );
+        assert_eq!(shown, "Creating the file.");
+    }
+
+    /// An unterminated thought span (token cap hit) must not dump the scratchpad.
+    #[test]
+    fn filter_hides_unterminated_thought() {
+        assert_eq!(stream_by_char("<|channel>thought\nstill thinking"), "");
+    }
+
+    #[test]
+    fn filter_hides_tool_markup_but_keeps_prose() {
+        let shown = stream_by_char("Let me look.<tool_call>\n{\"name\":\"read_file\"}\n</tool_call>");
+        assert_eq!(shown, "Let me look.");
+    }
+
+    #[test]
+    fn filter_passes_plain_prose_through_untouched() {
+        let text = "Here is the answer, no tools needed.";
+        assert_eq!(stream_by_char(text), text);
+    }
+
+    /// A partial tag must never leak, even if generation dies mid-tag.
+    #[test]
+    fn filter_never_leaks_partial_tag() {
+        let shown = stream_by_char("done <tool_c");
+        assert!(!shown.contains("<tool_c"), "leaked partial tag: {shown:?}");
+    }
+
+    /// Multi-byte characters must not be split mid-codepoint by the hold-back.
+    #[test]
+    fn filter_handles_multibyte_text() {
+        let text = "héllo wörld 日本語 →";
+        assert_eq!(stream_by_char(text), text);
+    }
+
+    #[test]
+    fn parses_canonical_tool_call() {
+        let calls = parse_local_tool_calls(
+            "<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"a.rs\"}}\n</tool_call>",
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[0].args["path"], "a.rs");
+    }
+
+    /// Hitting the token cap mid-call leaves no closing tag; still salvage it.
+    #[test]
+    fn parses_unterminated_tool_call() {
+        let calls =
+            parse_local_tool_calls("<tool_call>\n{\"name\": \"list_files\", \"arguments\": {}}");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "list_files");
+    }
+
+    /// Some models emit `arguments` as a JSON-encoded string rather than an object.
+    #[test]
+    fn parses_stringified_arguments() {
+        let calls = parse_local_tool_calls(
+            r#"<tool_call>{"name":"read_file","arguments":"{\"path\":\"b.rs\"}"}</tool_call>"#,
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].args["path"], "b.rs");
+    }
+
+    /// Fallback for models that ignore the tag convention and emit fenced JSON.
+    #[test]
+    fn parses_fenced_json_fallback() {
+        let calls = parse_local_tool_calls(
+            "Sure:\n```json\n{\"name\": \"search\", \"arguments\": {\"query\": \"foo\"}}\n```",
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "search");
+        assert_eq!(calls[0].args["query"], "foo");
+    }
+
+    #[test]
+    fn plain_prose_yields_no_tool_calls() {
+        assert!(parse_local_tool_calls("The bug is in main.rs, on line 12.").is_empty());
+    }
+
+    /// Malformed JSON must be dropped, not panic or half-execute.
+    #[test]
+    fn malformed_tool_call_is_ignored() {
+        assert!(parse_local_tool_calls("<tool_call>{not json}</tool_call>").is_empty());
+    }
+
+    #[test]
+    fn parses_back_to_back_tool_calls() {
+        let calls = parse_local_tool_calls(
+            "<tool_call>{\"name\":\"read_file\",\"arguments\":{\"path\":\"a\"}}</tool_call>\
+             <tool_call>{\"name\":\"read_file\",\"arguments\":{\"path\":\"b\"}}</tool_call>",
+        );
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[1].args["path"], "b");
+    }
+
+    /// Ask/Plan mode must not advertise mutating tools to the model.
+    #[test]
+    fn readonly_modes_hide_mutating_tools() {
+        let agent = local_tool_instructions(AgentMode::Agent);
+        assert!(agent.contains("write_file") && agent.contains("run_command"));
+
+        for mode in [AgentMode::Ask, AgentMode::Plan] {
+            let s = local_tool_instructions(mode);
+            assert!(s.contains("read_file"), "read_file should stay available");
+            assert!(!s.contains("### write_file"), "{mode:?} exposed write_file");
+            assert!(!s.contains("### run_command"), "{mode:?} exposed run_command");
+        }
+    }
 }
 
 #[cfg(test)]

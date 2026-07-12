@@ -291,42 +291,6 @@ pub async fn get_models(
     let client = reqwest::Client::new();
 
     match provider.as_str() {
-        "ollama" => {
-            // Fetch from Ollama's local API
-            let response = client
-                .get("http://localhost:11434/api/tags")
-                .send()
-                .await
-                .map_err(|e| format!("Failed to connect to Ollama: {}", e))?;
-
-            if !response.status().is_success() {
-                return Err("Failed to fetch Ollama models. Is Ollama running?".to_string());
-            }
-
-            let body: serde_json::Value = response
-                .json()
-                .await
-                .map_err(|e| format!("Failed to parse Ollama response: {}", e))?;
-
-            let models = body
-                .get("models")
-                .and_then(|m| m.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|m| {
-                            let name = m.get("name")?.as_str()?.to_string();
-                            Some(ModelInfo {
-                                id: name.clone(),
-                                name: name.clone(),
-                                provider: "ollama".to_string(),
-                            })
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            Ok(models)
-        }
         "openrouter" | _ => {
             // Fetch from OpenRouter API
             let mut req_builder = client.get("https://openrouter.ai/api/v1/models");
