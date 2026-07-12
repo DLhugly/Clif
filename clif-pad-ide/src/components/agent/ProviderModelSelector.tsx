@@ -1,37 +1,37 @@
 import { Component, Show } from "solid-js";
 import { settings } from "../../stores/settingsStore";
-import { PROVIDERS, POPULAR_MODELS, type OpenRouterModel } from "./constants";
+import { openRouterModels } from "../../stores/modelBrowserStore";
 import { KeyIcon } from "./icons";
 
 interface ProviderModelSelectorProps {
-  modelDropdownOpen: () => boolean;
-  setModelDropdownOpen: (v: boolean) => void;
-  openRouterModels: () => OpenRouterModel[];
-  fetchOpenRouterModels: () => void;
-  hasApiKey: () => boolean | null;
-  showSettings: () => boolean;
-  setShowSettings: (v: boolean) => void;
-  handleProviderChange: (provider: string) => void;
+  open: () => boolean;
+  setOpen: (v: boolean) => void;
+  // Key indicator is optional — the agent panel manages an inline API-key
+  // input, other mount points (e.g. the top bar) just need the picker.
+  hasApiKey?: () => boolean | null;
+  showSettings?: () => boolean;
+  setShowSettings?: (v: boolean) => void;
 }
 
 /**
- * Compact model chip + API-key indicator. Designed to sit inline inside the
- * unified agent header (no border, no padding wrapper). Clicking the chip
- * opens the full ModelBrowser, which also hosts the provider toggle — so
- * we don't duplicate controls at the top of the panel.
+ * Compact model chip. Clicking it opens the full ModelBrowser, which lists
+ * every runnable model — local (embedded engine) and cloud (OpenRouter) — in
+ * one place. No provider toggle here; the browser itself is the only picker.
  */
 const ProviderModelSelector: Component<ProviderModelSelectorProps> = (props) => {
+  const isLocal = () => settings().aiProvider === "local";
+
   const currentModelName = () => {
     const current = settings().aiModel;
-    const live = props.openRouterModels().find((m) => m.id === current);
-    const name =
-      live?.name ||
-      (POPULAR_MODELS[settings().aiProvider] || []).find((m) => m.value === current)?.label ||
-      current;
+    if (!current) return "Select model";
+    if (isLocal()) {
+      const base = current.split("/").pop() || current;
+      return base.replace(/\.gguf$/i, "");
+    }
+    const live = openRouterModels().find((m) => m.id === current);
+    const name = live?.name || current;
     return name.replace(/^[^:]+:\s*/, "");
   };
-  const providerMeta = () =>
-    PROVIDERS.find((p) => p.value === settings().aiProvider) ?? PROVIDERS[0];
 
   return (
     <div class="flex items-center shrink-0" style={{ gap: "4px", "min-width": "0" }}>
@@ -39,7 +39,7 @@ const ProviderModelSelector: Component<ProviderModelSelectorProps> = (props) => 
       <button
         class="flex items-center rounded-full transition-colors"
         style={{
-          background: props.modelDropdownOpen() ? "var(--bg-active)" : "var(--bg-hover)",
+          background: props.open() ? "var(--bg-active)" : "var(--bg-hover)",
           color: "var(--text-primary)",
           border: "1px solid var(--border-default)",
           cursor: "pointer",
@@ -51,20 +51,17 @@ const ProviderModelSelector: Component<ProviderModelSelectorProps> = (props) => 
           "min-width": "0",
         }}
         onMouseEnter={(e) => {
-          if (!props.modelDropdownOpen())
+          if (!props.open())
             (e.currentTarget as HTMLElement).style.background = "var(--bg-active)";
         }}
         onMouseLeave={(e) => {
-          if (!props.modelDropdownOpen())
+          if (!props.open())
             (e.currentTarget as HTMLElement).style.background = "var(--bg-hover)";
         }}
-        onClick={() => {
-          const next = !props.modelDropdownOpen();
-          props.setModelDropdownOpen(next);
-          if (next && settings().aiProvider === "openrouter") props.fetchOpenRouterModels();
-        }}
-        title={`${providerMeta().label} · ${currentModelName()} — click to change`}
+        onClick={() => props.setOpen(!props.open())}
+        title={`${currentModelName()} — click to change`}
       >
+        <span style={{ width: "7px", height: "7px", "border-radius": "999px", background: isLocal() ? "#22c55e" : "#a855f7", "flex-shrink": "0" }} />
         <span
           class="truncate"
           style={{
@@ -90,23 +87,23 @@ const ProviderModelSelector: Component<ProviderModelSelectorProps> = (props) => 
             "font-weight": "700",
           }}
         >
-          {providerMeta().label}
+          {isLocal() ? "Local" : "OpenRouter"}
         </span>
       </button>
 
-      {/* API key indicator — only loud when missing */}
-      <Show when={settings().aiProvider !== "ollama"}>
+      {/* API key indicator — only loud when missing, and only relevant for cloud */}
+      <Show when={!isLocal() && props.hasApiKey && props.showSettings && props.setShowSettings}>
         <button
           class="flex items-center justify-center shrink-0 rounded-full transition-colors"
           style={{
             width: "22px",
             height: "22px",
-            background: props.hasApiKey()
+            background: props.hasApiKey!()
               ? "transparent"
               : "color-mix(in srgb, var(--accent-yellow) 20%, transparent)",
-            color: props.hasApiKey() ? "var(--text-muted)" : "var(--accent-yellow)",
+            color: props.hasApiKey!() ? "var(--text-muted)" : "var(--accent-yellow)",
             border: `1px solid ${
-              props.hasApiKey()
+              props.hasApiKey!()
                 ? "var(--border-default)"
                 : "color-mix(in srgb, var(--accent-yellow) 45%, transparent)"
             }`,
@@ -116,12 +113,12 @@ const ProviderModelSelector: Component<ProviderModelSelectorProps> = (props) => 
             (e.currentTarget as HTMLElement).style.background = "var(--bg-active)";
           }}
           onMouseLeave={(e) => {
-            (e.currentTarget as HTMLElement).style.background = props.hasApiKey()
+            (e.currentTarget as HTMLElement).style.background = props.hasApiKey!()
               ? "transparent"
               : "color-mix(in srgb, var(--accent-yellow) 20%, transparent)";
           }}
-          onClick={() => props.setShowSettings(!props.showSettings())}
-          title={props.hasApiKey() ? "API key configured — click to change" : "Set API key"}
+          onClick={() => props.setShowSettings!(!props.showSettings!())}
+          title={props.hasApiKey!() ? "API key configured — click to change" : "Set API key"}
         >
           <KeyIcon />
         </button>

@@ -21,6 +21,12 @@ const [agentSessionId, setAgentSessionId] = createSignal<string | null>(null);
 const [agentError, setAgentError] = createSignal<string | null>(null);
 const [agentTokens, setAgentTokens] = createSignal({ prompt: 0, completion: 0, context: 0 });
 const [agentStatus, setAgentStatus] = createSignal("");
+// Throughput for the stats bar, in tokens/sec. The local engine measures this
+// exactly; for cloud turns we time the stream client-side.
+const [agentSpeed, setAgentSpeed] = createSignal(0);
+// Context window of the resident local model. The engine derives this from the
+// model's KV geometry + this machine's RAM, so it isn't known until a turn runs.
+const [localContextWindow, setLocalContextWindow] = createSignal(0);
 const [agentTabs, setAgentTabs] = createStore<AgentTab[]>([]);
 const [activeAgentTab, setActiveAgentTab] = createSignal("default");
 const [queuedMessages, setQueuedMessages] = createSignal<string[]>([]);
@@ -28,6 +34,8 @@ let tabCounter = 0;
 
 let unlisteners: UnlistenFn[] = [];
 let messageIdCounter = 0;
+// Wall-clock start of the current turn's token stream, for cloud throughput.
+let turnStartedAt = 0;
 let saveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 // Auto-save debounced — called after messages change
@@ -164,7 +172,9 @@ async function initAgentListeners() {
   unlisteners.push(
     await appWindow.listen<string>("agent_stream", (event) => {
       const chunk = event.payload;
+      if (chunk !== "[DONE]" && turnStartedAt === 0) turnStartedAt = Date.now();
       if (chunk === "[DONE]") {
+        turnStartedAt = 0;
         // Ensure any pending buffer is flushed before processing DONE state
         if (rafId) {
           cancelAnimationFrame(rafId);
@@ -433,7 +443,24 @@ async function initAgentListeners() {
         completion: prev.completion + completion_tokens,
         context: estimated_context,
       }));
+      // Cloud turns don't report throughput, so derive it from the wall-clock we
+      // measured across the stream. The local engine overrides this with its own
+      // exact figure via `agent_local_stats` below.
+      if (turnStartedAt > 0 && completion_tokens > 0) {
+        const elapsed = (Date.now() - turnStartedAt) / 1000;
+        if (elapsed > 0) setAgentSpeed(completion_tokens / elapsed);
+      }
     })
+  );
+
+  unlisteners.push(
+    await appWindow.listen<{ tokens_per_sec: number; loaded_from_disk: boolean; n_ctx: number }>(
+      "agent_local_stats",
+      (event) => {
+        setAgentSpeed(event.payload.tokens_per_sec);
+        setLocalContextWindow(event.payload.n_ctx);
+      },
+    )
   );
 
   unlisteners.push(
@@ -780,6 +807,8 @@ export {
   agentError,
   agentTokens,
   agentStatus,
+  agentSpeed,
+  localContextWindow,
   agentTabs,
   activeAgentTab,
   initAgentListeners,

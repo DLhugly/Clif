@@ -7,9 +7,11 @@ import {
   localModelDownload,
   localModelDelete,
   localModelSetActive,
+  localModelsList,
   localScanExisting,
   onLocalModelDownloadProgress,
 } from "../lib/tauri";
+import { updateSettings } from "./settingsStore";
 import type {
   HardwareInfo,
   CatalogEntry,
@@ -165,10 +167,25 @@ async function remove(id: string) {
   }
 }
 
+/**
+ * Make a downloaded catalog model the one the agent actually talks to.
+ * This is the same effect as picking it in the model browser — it sets
+ * aiProvider/aiModel directly to the resolved file path, so there's a single
+ * source of truth for "which local model is active" instead of a second,
+ * disconnected on-disk marker.
+ */
 async function setActive(id: string) {
   setError(null);
   try {
-    await localModelSetActive(id);
+    const downloaded = await localModelsList();
+    const entry = downloaded.find((m) => m.id === id);
+    if (!entry) throw new Error(`model '${id}' is not downloaded`);
+    // Both the real chat-model setting and the on-disk "active" marker (the
+    // latter only backs this screen's own badge + the "active" shorthand).
+    await Promise.all([
+      updateSettings({ aiProvider: "local", aiModel: entry.path }),
+      localModelSetActive(id),
+    ]);
     await refresh();
   } catch (e) {
     setError(String(e));

@@ -1,37 +1,66 @@
-// Full-panel model browser overlay — extracted from AgentChatPanel.tsx
-import { Component, For, Show, createSignal } from "solid-js";
-import type { Accessor } from "solid-js";
+// Full-screen model browser overlay. One list, two sections — Local (embedded
+// llama.cpp engine, runs in-process) and Cloud (OpenRouter). No provider tabs:
+// picking any entry sets both aiProvider and aiModel in one shot.
+import { Component, For, Show, createSignal, onMount } from "solid-js";
 import { settings } from "../../stores/settingsStore";
 import { fontSize } from "../../stores/uiStore";
-import { POPULAR_MODELS, PROVIDERS, formatPrice, modelProviderLabel, type OpenRouterModel } from "./constants";
+import { formatPrice, modelProviderLabel, type OpenRouterModel } from "./constants";
+import {
+  openRouterModels,
+  fetchingModels,
+  modelSearch,
+  setModelSearch,
+  modelSort,
+  setModelSort,
+  modelProviderFilter,
+  setModelProviderFilter,
+  fetchOpenRouterModels,
+  filteredCloudModels,
+} from "../../stores/modelBrowserStore";
+import { discovered, scanning, scanExisting } from "../../stores/localModelsStore";
+import type { DiscoverySource } from "../../types/localModels";
 
 interface ModelBrowserProps {
-  modelSearch: Accessor<string>;
-  setModelSearch: (v: string) => void;
-  modelSort: Accessor<"name" | "price-asc" | "price-desc" | "ctx">;
-  setModelSort: (v: "name" | "price-asc" | "price-desc" | "ctx") => void;
-  modelProviderFilter: Accessor<string>;
-  setModelProviderFilter: (v: string) => void;
-  openRouterModels: Accessor<OpenRouterModel[]>;
-  ollamaModels: Accessor<{ value: string; label: string }[]>;
-  fetchingModels: Accessor<boolean>;
-  loadingOllamaModels: Accessor<boolean>;
-  loadOllamaModels: () => void;
-  filteredModels: () => OpenRouterModel[];
-  handleModelChange: (model: string) => void;
-  setModelDropdownOpen: (v: boolean) => void;
-  handleProviderChange: (provider: string) => void;
+  onPick: (provider: string, model: string) => void;
+  onClose: () => void;
 }
+
+const SOURCE_LABEL: Record<DiscoverySource, string> = {
+  lmstudio: "LM Studio",
+  ollama: "Ollama",
+  huggingface: "HF cache",
+  clif: "Clif",
+};
 
 const ModelBrowser: Component<ModelBrowserProps> = (props) => {
   const [hoveredModel, setHoveredModel] = createSignal<string | null>(null);
 
+  onMount(() => {
+    void scanExisting();
+    void fetchOpenRouterModels();
+  });
+
+  function close() {
+    props.onClose();
+    setModelSearch("");
+  }
+
+  const cloudSearchMatch = () => {
+    const q = modelSearch().toLowerCase();
+    return (m: { name: string; path?: string }) => !q || m.name.toLowerCase().includes(q);
+  };
+
+  const localMatches = () => {
+    const match = cloudSearchMatch();
+    return discovered().filter((d) => match({ name: d.name }));
+  };
+
   return (
     <div
       style={{
-        position: "absolute", inset: "0",
+        position: "fixed", inset: "0",
         background: "var(--bg-surface)",
-        "z-index": "50",
+        "z-index": "2000",
         display: "flex", "flex-direction": "column",
       }}
     >
@@ -46,10 +75,7 @@ const ModelBrowser: Component<ModelBrowserProps> = (props) => {
         }}
       >
         <button
-          onClick={() => {
-            props.setModelDropdownOpen(false);
-            props.setModelSearch("");
-          }}
+          onClick={close}
           style={{
             background: "transparent",
             border: "none",
@@ -65,58 +91,11 @@ const ModelBrowser: Component<ModelBrowserProps> = (props) => {
           ←
         </button>
 
-        {/* Provider pill — same segmented-control style used elsewhere. Lives
-            in the browser now so the main agent header doesn't have to. */}
-        <div
-          class="flex items-center shrink-0"
-          style={{
-            border: "1px solid var(--border-default)",
-            background: "color-mix(in srgb, var(--bg-base) 70%, transparent)",
-            height: "24px",
-            "border-radius": "999px",
-            padding: "2px",
-            gap: "2px",
-          }}
-          role="tablist"
-          aria-label="Provider"
-        >
-          <For each={PROVIDERS}>
-            {(p) => {
-              const active = () => settings().aiProvider === p.value;
-              return (
-                <button
-                  class="flex items-center transition-colors"
-                  style={{
-                    height: "100%",
-                    padding: "0 10px",
-                    background: active()
-                      ? "color-mix(in srgb, var(--accent-primary) 22%, transparent)"
-                      : "transparent",
-                    color: active() ? "var(--accent-primary)" : "var(--text-muted)",
-                    border: "none",
-                    cursor: "pointer",
-                    "font-size": "11px",
-                    "font-weight": active() ? "700" : "500",
-                    "border-radius": "999px",
-                    "letter-spacing": "0.01em",
-                  }}
-                  onClick={() => props.handleProviderChange(p.value)}
-                  title={p.hint}
-                  aria-selected={active()}
-                  role="tab"
-                >
-                  {p.label}
-                </button>
-              );
-            }}
-          </For>
-        </div>
-
         <input
           type="text"
-          placeholder={props.fetchingModels() ? "Loading models from OpenRouter..." : "Search models..."}
-          value={props.modelSearch()}
-          onInput={(e) => props.setModelSearch(e.currentTarget.value)}
+          placeholder={fetchingModels() ? "Loading models from OpenRouter..." : "Search models..."}
+          value={modelSearch()}
+          onInput={(e) => setModelSearch(e.currentTarget.value)}
           autofocus
           style={{
             flex: "1",
@@ -132,205 +111,203 @@ const ModelBrowser: Component<ModelBrowserProps> = (props) => {
         />
       </div>
 
-      {/* Sort + filter bar */}
-      <Show when={settings().aiProvider === "openrouter"}>
-        <div style={{ padding: "6px 10px", "border-bottom": "1px solid var(--border-muted)", display: "flex", gap: "6px", "align-items": "center", "flex-wrap": "wrap" }}>
-          {/* Sort */}
-          <div class="flex items-center gap-1" style={{ "font-size": "10px", color: "var(--text-muted)" }}>
-            <span>Sort:</span>
-            <For each={[
-              { v: "name" as const, label: "A–Z" },
-              { v: "price-asc" as const, label: "Cheapest" },
-              { v: "price-desc" as const, label: "Priciest" },
-              { v: "ctx" as const, label: "Context" },
-            ]}>
-              {(s) => (
-                <button
-                  onClick={() => props.setModelSort(s.v)}
-                  style={{
-                    background: props.modelSort() === s.v ? "var(--accent-primary)" : "var(--bg-hover)",
-                    color: props.modelSort() === s.v ? "#fff" : "var(--text-muted)",
-                    border: "none", cursor: "pointer", "font-size": "10px", "font-weight": "600",
-                    padding: "2px 7px", "border-radius": "4px",
-                  }}
-                >{s.label}</button>
-              )}
-            </For>
-          </div>
-
-          {/* Provider filter */}
-          <div class="flex items-center gap-1 ml-2" style={{ "font-size": "10px", color: "var(--text-muted)" }}>
-            <For each={[
-              { v: "all", label: "All" },
-              { v: "anthropic", label: "Anthropic" },
-              { v: "openai", label: "OpenAI" },
-              { v: "google", label: "Google" },
-              { v: "meta-llama", label: "Meta" },
-              { v: "deepseek", label: "DeepSeek" },
-              { v: "mistralai", label: "Mistral" },
-            ]}>
-              {(p) => (
-                <button
-                  onClick={() => props.setModelProviderFilter(p.v)}
-                  style={{
-                    background: props.modelProviderFilter() === p.v ? "var(--bg-active)" : "transparent",
-                    color: props.modelProviderFilter() === p.v ? "var(--text-primary)" : "var(--text-muted)",
-                    border: props.modelProviderFilter() === p.v ? "1px solid var(--border-default)" : "1px solid transparent",
-                    cursor: "pointer", "font-size": "10px", "font-weight": "500",
-                    padding: "2px 6px", "border-radius": "4px",
-                  }}
-                >{p.label}</button>
-              )}
-            </For>
-          </div>
+      {/* Sort + filter bar (cloud only) */}
+      <div style={{ padding: "6px 10px", "border-bottom": "1px solid var(--border-muted)", display: "flex", gap: "6px", "align-items": "center", "flex-wrap": "wrap" }}>
+        <div class="flex items-center gap-1" style={{ "font-size": "10px", color: "var(--text-muted)" }}>
+          <span>Sort:</span>
+          <For each={[
+            { v: "name" as const, label: "A–Z" },
+            { v: "price-asc" as const, label: "Cheapest" },
+            { v: "price-desc" as const, label: "Priciest" },
+            { v: "ctx" as const, label: "Context" },
+          ]}>
+            {(s) => (
+              <button
+                onClick={() => setModelSort(s.v)}
+                style={{
+                  background: modelSort() === s.v ? "var(--accent-primary)" : "var(--bg-hover)",
+                  color: modelSort() === s.v ? "#fff" : "var(--text-muted)",
+                  border: "none", cursor: "pointer", "font-size": "10px", "font-weight": "600",
+                  padding: "2px 7px", "border-radius": "4px",
+                }}
+              >{s.label}</button>
+            )}
+          </For>
         </div>
-      </Show>
+
+        <div class="flex items-center gap-1 ml-2" style={{ "font-size": "10px", color: "var(--text-muted)" }}>
+          <For each={[
+            { v: "all", label: "All" },
+            { v: "anthropic", label: "Anthropic" },
+            { v: "openai", label: "OpenAI" },
+            { v: "google", label: "Google" },
+            { v: "meta-llama", label: "Meta" },
+            { v: "deepseek", label: "DeepSeek" },
+            { v: "mistralai", label: "Mistral" },
+          ]}>
+            {(p) => (
+              <button
+                onClick={() => setModelProviderFilter(p.v)}
+                style={{
+                  background: modelProviderFilter() === p.v ? "var(--bg-active)" : "transparent",
+                  color: modelProviderFilter() === p.v ? "var(--text-primary)" : "var(--text-muted)",
+                  border: modelProviderFilter() === p.v ? "1px solid var(--border-default)" : "1px solid transparent",
+                  cursor: "pointer", "font-size": "10px", "font-weight": "500",
+                  padding: "2px 6px", "border-radius": "4px",
+                }}
+              >{p.label}</button>
+            )}
+          </For>
+        </div>
+      </div>
 
       {/* Model list */}
       <div style={{ "overflow-y": "auto", flex: "1", padding: "6px 8px" }}>
-        <Show when={settings().aiProvider === "ollama"}>
-          <Show when={props.loadingOllamaModels()}>
-            <div style={{ padding: "32px", "text-align": "center", color: "var(--text-muted)", "font-size": "12px" }}>Loading Ollama models...</div>
+        {/* LOCAL — embedded engine, runs in-process, no server needed */}
+        <div class="flex items-center gap-2" style={{ padding: "8px 6px 4px" }}>
+          <span style={{ "font-size": "10px", "font-weight": "700", color: "var(--text-muted)", "letter-spacing": "0.04em" }}>
+            LOCAL — ON YOUR MACHINE
+          </span>
+          <Show when={scanning()}>
+            <span style={{ "font-size": "10px", color: "var(--text-muted)" }}>scanning…</span>
           </Show>
-          <Show when={!props.loadingOllamaModels()}>
-            <For each={props.ollamaModels()}>
-              {(m) => {
-                const isActive = () => settings().aiModel === m.value;
-                return (
-                  <button
-                    class="flex items-center justify-between w-full rounded-lg px-3 py-2.5 transition-colors"
-                    style={{
-                      background: isActive() ? "color-mix(in srgb, var(--accent-primary) 10%, transparent)" : "transparent",
-                      border: isActive() ? "1px solid color-mix(in srgb, var(--accent-primary) 25%, transparent)" : "1px solid transparent",
-                      cursor: "pointer", "text-align": "left", "margin-bottom": "2px",
-                    }}
-                    onMouseEnter={(e) => { if (!isActive()) (e.currentTarget as HTMLElement).style.background = "var(--bg-hover)"; }}
-                    onMouseLeave={(e) => { if (!isActive()) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-                    onClick={() => { props.handleModelChange(m.value); props.setModelDropdownOpen(false); props.setModelSearch(""); }}
-                  >
-                    <span style={{ "font-size": "13px", "font-weight": "500", color: isActive() ? "var(--accent-primary)" : "var(--text-primary)" }}>{m.label}</span>
-                    <Show when={isActive()}>
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                    </Show>
-                  </button>
-                );
-              }}
-            </For>
-            <button
-              type="button"
-              class="w-full text-left px-3 py-2 text-sm hover:bg-gray-700 transition-colors border-t border-gray-600"
-              style={{ color: "var(--text-muted)", "border-top": "1px solid var(--border-muted)", "margin-top": "8px", cursor: "pointer" }}
-              onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.background = "var(--bg-hover)"}
-              onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.background = "transparent"}
-              onClick={props.loadOllamaModels}
-              disabled={props.loadingOllamaModels()}
-            >
-              🔄 Refresh Models
-            </button>
-          </Show>
-        </Show>
-
-        <Show when={settings().aiProvider === "openrouter"}>
-          <Show when={props.filteredModels().length === 0 && !props.fetchingModels()}>
-            <div style={{ padding: "32px", "text-align": "center", color: "var(--text-muted)", "font-size": "13px" }}>No models found</div>
-          </Show>
-          <Show when={props.fetchingModels()}>
-            <div style={{ padding: "32px", "text-align": "center", color: "var(--text-muted)", "font-size": "12px" }}>Loading models from OpenRouter...</div>
-          </Show>
-          <For each={props.filteredModels()}>
-            {(m: OpenRouterModel) => {
-              const priceIn = m.pricing ? formatPrice(m.pricing.prompt) : null;
-              const priceOut = m.pricing ? formatPrice(m.pricing.completion) : null;
-              const isFree = !parseFloat(m.pricing?.prompt || "0");
-              const ctxK = m.context_length ? (m.context_length >= 1_000_000 ? `${(m.context_length/1_000_000).toFixed(0)}M` : `${Math.round(m.context_length/1000)}K`) : null;
-              const provider = modelProviderLabel(m.id);
-              const shortName = (m.name || m.id).replace(/^[^:]+:\s*/, "");
-              const hasVision = m.architecture?.input_modalities?.includes("image");
-              const hasThinking = m.supported_parameters?.includes("reasoning") || m.id.includes("thinking") || m.id.includes("r1") || m.id.includes("deepseek-r");
-              const hasTools = m.supported_parameters?.includes("tools");
-              const hasStructured = m.supported_parameters?.includes("structured_outputs");
-              const isLongCtx = (m.context_length || 0) >= 128_000;
-              const isActive = () => settings().aiModel === m.id;
-              const isHovered = () => hoveredModel() === m.id;
-              const shortDesc = m.description ? m.description.replace(/\n+/g, " ").slice(0, 100) + (m.description.length > 100 ? "…" : "") : "";
-              const fullDesc = m.description ? m.description.replace(/\n+/g, " ") : "";
-
+        </div>
+        <Show
+          when={localMatches().length > 0}
+          fallback={
+            <div style={{ padding: "6px 6px 10px", "font-size": "11px", color: "var(--text-muted)", "line-height": "1.5" }}>
+              No local models found. Download one from the Local Models tab — it
+              runs in Clif's built-in engine, no external app needed.
+            </div>
+          }
+        >
+          <For each={localMatches()}>
+            {(d) => {
+              const isActive = () => settings().aiProvider === "local" && settings().aiModel === d.path;
               return (
                 <button
-                  class="w-full text-left rounded-lg px-3 py-2 transition-colors"
+                  class="flex items-center justify-between w-full rounded-lg px-3 py-2.5 transition-colors"
                   style={{
                     background: isActive() ? "color-mix(in srgb, var(--accent-primary) 10%, transparent)" : "transparent",
                     border: isActive() ? "1px solid color-mix(in srgb, var(--accent-primary) 25%, transparent)" : "1px solid transparent",
-                    cursor: "pointer", "margin-bottom": "2px",
-                    display: "block", transition: "background 0.1s, border-color 0.1s",
+                    cursor: "pointer", "text-align": "left", "margin-bottom": "2px",
                   }}
-                  onMouseEnter={() => setHoveredModel(m.id)}
-                  onMouseLeave={() => setHoveredModel(null)}
-                  onClick={() => { props.handleModelChange(m.id); props.setModelDropdownOpen(false); props.setModelSearch(""); }}
+                  onMouseEnter={(e) => { if (!isActive()) (e.currentTarget as HTMLElement).style.background = "var(--bg-hover)"; }}
+                  onMouseLeave={(e) => { if (!isActive()) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                  onClick={() => { props.onPick("local", d.path); close(); }}
                 >
-                  {/* Row 1: name + badges + price */}
-                  <div class="flex items-center gap-2" style={{ "margin-bottom": "3px" }}>
-                    <span style={{
-                      "font-size": `${fontSize()}px`, "font-weight": "700",
-                      color: isActive() ? "var(--accent-primary)" : "var(--text-primary)",
-                      flex: "1", overflow: "hidden", "text-overflow": "ellipsis", "white-space": "nowrap",
-                    }}>
-                      {shortName}
-                    </span>
-                    <Show when={hasThinking}>
-                      <span title="Reasoning / thinking mode" style={{ "font-size": `${fontSize()}px`, "line-height": "1", "flex-shrink": "0" }}>🧠</span>
-                    </Show>
-                    <Show when={hasVision}>
-                      <span title="Accepts image inputs" style={{ "font-size": `${fontSize()}px`, "line-height": "1", "flex-shrink": "0" }}>📷</span>
-                    </Show>
-                    <Show when={isFree}>
-                      <span title="Free to use" style={{ "font-size": `${fontSize()}px`, "line-height": "1", "flex-shrink": "0" }}>🆓</span>
-                    </Show>
-                    <span style={{
-                      "font-size": `${fontSize() - 1}px`, "font-family": "var(--font-mono, monospace)",
-                      "font-weight": "600", "flex-shrink": "0",
-                      color: isFree ? "var(--accent-green)" : "var(--text-secondary)",
-                    }}>
-                      {isFree ? "free" : `${priceIn} / ${priceOut}`}
-                    </span>
-                  </div>
-
-                  {/* Row 2: provider · context · short desc (or full on hover) */}
-                  <div style={{ "font-size": `${fontSize() - 2}px`, color: "var(--text-muted)", display: "flex", "flex-wrap": "wrap", gap: "4px", "align-items": "center" }}>
-                    <span style={{ "flex-shrink": "0" }}>{provider}</span>
-                    <Show when={ctxK}>
-                      <span style={{ "flex-shrink": "0", opacity: "0.5" }}>·</span>
-                      <span style={{ "flex-shrink": "0", color: (m.context_length || 0) >= 200_000 ? "var(--accent-blue)" : "var(--text-muted)" }}>
-                        {(m.context_length || 0) >= 1_000_000 ? "🔮 " : ""}{ctxK} ctx
-                      </span>
-                    </Show>
-                    <Show when={!isFree && priceIn && priceOut && isHovered()}>
-                      <span style={{ "flex-shrink": "0", opacity: "0.5" }}>·</span>
-                      <span style={{ "flex-shrink": "0", color: "var(--text-muted)" }}>in: {priceIn} / out: {priceOut} per 1M tokens</span>
-                    </Show>
-                  </div>
-
-                  {/* Full description on hover */}
-                  <Show when={isHovered() && fullDesc}>
-                    <div style={{
-                      "font-size": `${fontSize() - 2}px`, color: "var(--text-muted)",
-                      "line-height": "1.5", "margin-top": "6px",
-                      "padding-top": "6px", "border-top": "1px solid var(--border-muted)",
-                    }}>
-                      {fullDesc}
-                    </div>
-                  </Show>
+                  <span class="flex items-center gap-2 min-w-0">
+                    <span style={{ width: "7px", height: "7px", "border-radius": "999px", background: "#22c55e", "flex-shrink": "0" }} />
+                    <span class="truncate" style={{ "font-size": "13px", "font-weight": isActive() ? "700" : "500", color: isActive() ? "var(--accent-primary)" : "var(--text-primary)" }}>{d.name}</span>
+                  </span>
+                  <span style={{ "font-size": "10px", color: "var(--text-muted)", "white-space": "nowrap", "flex-shrink": "0" }}>{SOURCE_LABEL[d.source]}</span>
                 </button>
               );
             }}
           </For>
         </Show>
+
+        {/* CLOUD — OpenRouter */}
+        <div style={{ padding: "12px 6px 4px" }}>
+          <span style={{ "font-size": "10px", "font-weight": "700", color: "var(--text-muted)", "letter-spacing": "0.04em" }}>
+            CLOUD — OPENROUTER
+          </span>
+        </div>
+        <Show when={filteredCloudModels().length === 0 && !fetchingModels()}>
+          <div style={{ padding: "32px", "text-align": "center", color: "var(--text-muted)", "font-size": "13px" }}>No models found</div>
+        </Show>
+        <Show when={fetchingModels()}>
+          <div style={{ padding: "32px", "text-align": "center", color: "var(--text-muted)", "font-size": "12px" }}>Loading models from OpenRouter...</div>
+        </Show>
+        <For each={filteredCloudModels()}>
+          {(m: OpenRouterModel) => {
+            const priceIn = m.pricing ? formatPrice(m.pricing.prompt) : null;
+            const priceOut = m.pricing ? formatPrice(m.pricing.completion) : null;
+            const isFree = !parseFloat(m.pricing?.prompt || "0");
+            const ctxK = m.context_length ? (m.context_length >= 1_000_000 ? `${(m.context_length/1_000_000).toFixed(0)}M` : `${Math.round(m.context_length/1000)}K`) : null;
+            const provider = modelProviderLabel(m.id);
+            const shortName = (m.name || m.id).replace(/^[^:]+:\s*/, "");
+            const hasVision = m.architecture?.input_modalities?.includes("image");
+            const hasThinking = m.supported_parameters?.includes("reasoning") || m.id.includes("thinking") || m.id.includes("r1") || m.id.includes("deepseek-r");
+            const isActive = () => settings().aiProvider === "openrouter" && settings().aiModel === m.id;
+            const isHovered = () => hoveredModel() === m.id;
+            const fullDesc = m.description ? m.description.replace(/\n+/g, " ") : "";
+
+            return (
+              <button
+                class="w-full text-left rounded-lg px-3 py-2 transition-colors"
+                style={{
+                  background: isActive() ? "color-mix(in srgb, var(--accent-primary) 10%, transparent)" : "transparent",
+                  border: isActive() ? "1px solid color-mix(in srgb, var(--accent-primary) 25%, transparent)" : "1px solid transparent",
+                  cursor: "pointer", "margin-bottom": "2px",
+                  display: "block", transition: "background 0.1s, border-color 0.1s",
+                }}
+                onMouseEnter={() => setHoveredModel(m.id)}
+                onMouseLeave={() => setHoveredModel(null)}
+                onClick={() => { props.onPick("openrouter", m.id); close(); }}
+              >
+                {/* Row 1: name + badges + price */}
+                <div class="flex items-center gap-2" style={{ "margin-bottom": "3px" }}>
+                  <span style={{
+                    "font-size": `${fontSize()}px`, "font-weight": "700",
+                    color: isActive() ? "var(--accent-primary)" : "var(--text-primary)",
+                    flex: "1", overflow: "hidden", "text-overflow": "ellipsis", "white-space": "nowrap",
+                  }}>
+                    {shortName}
+                  </span>
+                  <Show when={hasThinking}>
+                    <span title="Reasoning / thinking mode" style={{ "font-size": `${fontSize()}px`, "line-height": "1", "flex-shrink": "0" }}>🧠</span>
+                  </Show>
+                  <Show when={hasVision}>
+                    <span title="Accepts image inputs" style={{ "font-size": `${fontSize()}px`, "line-height": "1", "flex-shrink": "0" }}>📷</span>
+                  </Show>
+                  <Show when={isFree}>
+                    <span title="Free to use" style={{ "font-size": `${fontSize()}px`, "line-height": "1", "flex-shrink": "0" }}>🆓</span>
+                  </Show>
+                  <span style={{
+                    "font-size": `${fontSize() - 1}px`, "font-family": "var(--font-mono, monospace)",
+                    "font-weight": "600", "flex-shrink": "0",
+                    color: isFree ? "var(--accent-green)" : "var(--text-secondary)",
+                  }}>
+                    {isFree ? "free" : `${priceIn} / ${priceOut}`}
+                  </span>
+                </div>
+
+                {/* Row 2: provider · context · short desc (or full on hover) */}
+                <div style={{ "font-size": `${fontSize() - 2}px`, color: "var(--text-muted)", display: "flex", "flex-wrap": "wrap", gap: "4px", "align-items": "center" }}>
+                  <span style={{ "flex-shrink": "0" }}>{provider}</span>
+                  <Show when={ctxK}>
+                    <span style={{ "flex-shrink": "0", opacity: "0.5" }}>·</span>
+                    <span style={{ "flex-shrink": "0", color: (m.context_length || 0) >= 200_000 ? "var(--accent-blue)" : "var(--text-muted)" }}>
+                      {(m.context_length || 0) >= 1_000_000 ? "🔮 " : ""}{ctxK} ctx
+                    </span>
+                  </Show>
+                  <Show when={!isFree && priceIn && priceOut && isHovered()}>
+                    <span style={{ "flex-shrink": "0", opacity: "0.5" }}>·</span>
+                    <span style={{ "flex-shrink": "0", color: "var(--text-muted)" }}>in: {priceIn} / out: {priceOut} per 1M tokens</span>
+                  </Show>
+                </div>
+
+                {/* Full description on hover */}
+                <Show when={isHovered() && fullDesc}>
+                  <div style={{
+                    "font-size": `${fontSize() - 2}px`, color: "var(--text-muted)",
+                    "line-height": "1.5", "margin-top": "6px",
+                    "padding-top": "6px", "border-top": "1px solid var(--border-muted)",
+                  }}>
+                    {fullDesc}
+                  </div>
+                </Show>
+              </button>
+            );
+          }}
+        </For>
       </div>
 
       {/* Footer count */}
       <div style={{ padding: "5px 12px", "border-top": "1px solid var(--border-muted)", "font-size": "10px", color: "var(--text-muted)", display: "flex", "justify-content": "space-between" }}>
-        <span>{props.filteredModels().length} models</span>
-        <Show when={settings().aiProvider === "openrouter" && props.openRouterModels().length > 0}>
+        <span>{localMatches().length} local · {filteredCloudModels().length} cloud</span>
+        <Show when={openRouterModels().length > 0}>
           <span>per 1M tokens · live from openrouter.ai</span>
         </Show>
       </div>

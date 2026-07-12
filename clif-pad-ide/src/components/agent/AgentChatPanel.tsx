@@ -4,7 +4,6 @@ import {
   setAgentMessages,
   agentSessionId,
   agentStreaming,
-  agentTokens,
   agentStatus,
   agentTabs,
   activeAgentTab,
@@ -26,15 +25,12 @@ import type { FileEntry } from "../../types/files";
 import { currentBranch } from "../../stores/gitStore";
 import { settings, updateSettings } from "../../stores/settingsStore";
 import { fontSize } from "../../stores/uiStore";
-import { getApiKey, setApiKey as saveApiKey, agentApproveCommand, clifProjectInitialized, clifReadContext, clifInitProject, getModels } from "../../lib/tauri";
+import { getApiKey, setApiKey as saveApiKey, agentApproveCommand, clifProjectInitialized, clifReadContext, clifInitProject } from "../../lib/tauri";
 import ChatMessage from "./ChatMessage";
 import type { AgentContext } from "../../types/agent";
 
 // Extracted sub-components
 import { SparkleIcon, SendIcon, StopIcon, KeyIcon, GearIcon } from "./icons";
-import { PROVIDERS, POPULAR_MODELS, formatPrice, modelProviderLabel, type OpenRouterModel } from "./constants";
-import SetupView from "./SetupView";
-import SettingsPanel from "./SettingsPanel";
 import ModelBrowser from "./ModelBrowser";
 import AgentMarkdownStyles from "./AgentMarkdownStyles";
 import ContextFilesPanel from "./ContextFilesPanel";
@@ -43,6 +39,7 @@ import ChatInputArea from "./ChatInputArea";
 import AgentTabs from "./AgentTabs";
 import InitProjectBanner from "./InitProjectBanner";
 import ProviderModelSelector from "./ProviderModelSelector";
+import AgentStatsBar from "./AgentStatsBar";
 import EmptyState from "./EmptyState";
 
 type SessionTodo = {
@@ -89,12 +86,6 @@ const AgentChatPanel: Component = () => {
   const [showSettings, setShowSettings] = createSignal(false);
   const [savingKey, setSavingKey] = createSignal(false);
   const [modelDropdownOpen, setModelDropdownOpen] = createSignal(false);
-  const [openRouterModels, setOpenRouterModels] = createSignal<OpenRouterModel[]>([]);
-  const [ollamaModels, setOllamaModels] = createSignal<{value: string, label: string}[]>([]);
-  const [modelSearch, setModelSearch] = createSignal("");
-  const [fetchingModels, setFetchingModels] = createSignal(false);
-  const [modelSort, setModelSort] = createSignal<"name" | "price-asc" | "price-desc" | "ctx">("name");
-  const [modelProviderFilter, setModelProviderFilter] = createSignal("all");
   const [pendingCommand, setPendingCommand] = createSignal<{ sessionId: string; command: string; toolCallId: string } | null>(null);
   const [clifInitializing, setClifInitializing] = createSignal(false);
   const [clifInitProgress, setClifInitProgress] = createSignal<{ step: number; total: number; message: string; elapsed_secs: number }>({ step: 0, total: 15, message: "", elapsed_secs: 0 });
@@ -104,7 +95,6 @@ const AgentChatPanel: Component = () => {
   const [mentionQuery, setMentionQuery] = createSignal("");
   const [mentionIndex, setMentionIndex] = createSignal(0);
   const [mentionStart, setMentionStart] = createSignal(0);
-  const [loadingOllamaModels, setLoadingOllamaModels] = createSignal(false);
   const [pastedImages, setPastedImages] = createSignal<string[]>([]); // base64 data URLs
   const [agentMode, setAgentMode] = createSignal<"agent" | "ask" | "plan">("agent");
   const [taskListExpanded, setTaskListExpanded] = createSignal(true);
@@ -131,46 +121,6 @@ const AgentChatPanel: Component = () => {
       .slice(0, 15);
   });
 
-  async function fetchOpenRouterModels() {
-    if (openRouterModels().length > 0) return;
-    setFetchingModels(true);
-    try {
-      const resp = await fetch("https://openrouter.ai/api/v1/models?supported_parameters=tools&output_modalities=text");
-      if (!resp.ok) return;
-      const data = await resp.json();
-      const models: OpenRouterModel[] = (data.data || [])
-        .filter((m: OpenRouterModel) => m.id && !m.id.includes(":free"));
-      setOpenRouterModels(models);
-    } catch {
-      // fall back to static list
-    } finally {
-      setFetchingModels(false);
-    }
-  }
-
-  const filteredModels = () => {
-    const q = modelSearch().toLowerCase();
-    const pf = modelProviderFilter();
-    let models = openRouterModels().length > 0
-      ? openRouterModels()
-      : (POPULAR_MODELS.openrouter || []).map(m => ({ id: m.value, name: m.label }));
-
-    if (q) models = models.filter((m: OpenRouterModel) =>
-      m.id.toLowerCase().includes(q) || (m.name || "").toLowerCase().includes(q)
-    );
-    if (pf !== "all") models = models.filter((m: OpenRouterModel) =>
-      m.id.startsWith(pf + "/")
-    );
-
-    const sort = modelSort();
-    return [...models].sort((a: OpenRouterModel, b: OpenRouterModel) => {
-      if (sort === "name") return (a.name || a.id).localeCompare(b.name || b.id);
-      if (sort === "price-asc") return parseFloat(a.pricing?.prompt || "0") - parseFloat(b.pricing?.prompt || "0");
-      if (sort === "price-desc") return parseFloat(b.pricing?.prompt || "0") - parseFloat(a.pricing?.prompt || "0");
-      if (sort === "ctx") return (b.context_length || 0) - (a.context_length || 0);
-      return 0;
-    });
-  };
 
   onMount(async () => {
     await initAgentListeners();
@@ -216,53 +166,10 @@ const AgentChatPanel: Component = () => {
     }
   });
 
-  async function loadOllamaModels() {
-    if (settings().aiProvider !== "ollama") return;
-    
-    try {
-      setLoadingOllamaModels(true);
-      const models = await getModels("ollama", null);
-      
-      const ollamaList = models.map(model => ({
-        value: model.id,
-        label: model.name
-      }));
-      
-      setOllamaModels(ollamaList);
-      // Auto-select first model if current isn't available
-      const currentModel = settings().aiModel;
-      const hasCurrentModel = ollamaList.some(m => m.value === currentModel);
-      if (!hasCurrentModel && ollamaList.length > 0) {
-        updateSettings({ aiModel: ollamaList[0].value });
-      }
-    } catch (error) {
-      console.warn("Failed to load Ollama models:", error);
-      // Fallback to hardcoded list
-      setOllamaModels([
-        { value: "llama3.1", label: "Llama 3.1" },
-        { value: "codellama", label: "Code Llama" },
-        { value: "mistral", label: "Mistral" },
-        { value: "deepseek-coder-v2", label: "DeepSeek Coder V2" },
-        { value: "qwen3-coder:30b", label: "qwen3-coder:30b" },
-        { value: "qwen2.5-coder", label: "Qwen 2.5 Coder" },
-      ]);
-    } finally {
-      setLoadingOllamaModels(false);
-    }
-  }
-
-  // Call when provider changes to Ollama
-  createEffect(() => {
-    if (settings().aiProvider === "ollama") {
-      loadOllamaModels();
-    }
-  });
-
   async function checkApiKey() {
     const provider = settings().aiProvider;
-    if (provider === "ollama") {
-      setHasApiKey(true); // Ollama doesn't need a key
-      await loadOllamaModels(); // Fetch available models
+    if (provider === "local") {
+      setHasApiKey(true); // embedded engine needs no key
       return;
     }
     try {
@@ -289,28 +196,9 @@ const AgentChatPanel: Component = () => {
     }
   }
 
-  function handleProviderChange(provider: string) {
-    updateSettings({ aiProvider: provider });
-    // Set a default model for the provider
-    const models = POPULAR_MODELS[provider];
-    if (models && models.length > 0) {
-      updateSettings({ aiModel: models[0].value });
-    }
-    // Re-check API key for new provider
+  function handlePickModel(provider: string, model: string) {
+    updateSettings({ aiProvider: provider, aiModel: model });
     setTimeout(() => checkApiKey(), 100);
-    // Pull live model lists for the newly-selected provider so the browser
-    // doesn't sit on a stale or empty list. Previously the fetch only ran
-    // when the model dropdown was opened from a fresh state — switching
-    // providers inside the open browser left it empty.
-    if (provider === "openrouter") {
-      void fetchOpenRouterModels();
-    } else if (provider === "ollama") {
-      void loadOllamaModels();
-    }
-  }
-
-  function handleModelChange(model: string) {
-    updateSettings({ aiModel: model });
   }
 
   // Only render last N messages to keep DOM lean (user can load more)
@@ -506,7 +394,7 @@ const AgentChatPanel: Component = () => {
       clifProjectInitialized(root).then((exists) => {
         setClifExists(exists);
         // Auto-init in background if no CLIF.md and we have an API key
-        if (!exists && settings().aiProvider !== "ollama") {
+        if (!exists && settings().aiProvider !== "local") {
           handleInitProject();
         }
       });
@@ -642,10 +530,6 @@ const AgentChatPanel: Component = () => {
     setContextFiles(contextFiles().filter((f) => f !== path));
   }
 
-  // SetupView is now imported from ./SetupView
-
-  // SettingsPanel is now imported from ./SettingsPanel
-
   return (
     <div
       class="flex flex-col h-full overflow-hidden"
@@ -675,17 +559,14 @@ const AgentChatPanel: Component = () => {
         {/* Right: model chip + init project. Provider toggle lives inside
             the model chip's browser now, so we don't duplicate controls. */}
         <ProviderModelSelector
-          modelDropdownOpen={modelDropdownOpen}
-          setModelDropdownOpen={setModelDropdownOpen}
-          openRouterModels={openRouterModels}
-          fetchOpenRouterModels={fetchOpenRouterModels}
+          open={modelDropdownOpen}
+          setOpen={setModelDropdownOpen}
           hasApiKey={hasApiKey}
           showSettings={showSettings}
           setShowSettings={setShowSettings}
-          handleProviderChange={handleProviderChange}
         />
 
-        <Show when={projectRoot() && settings().aiProvider !== "ollama"}>
+        <Show when={projectRoot() && settings().aiProvider !== "local"}>
           <button
             class="flex items-center justify-center shrink-0 rounded-full transition-colors"
             style={{
@@ -735,8 +616,11 @@ const AgentChatPanel: Component = () => {
         </Show>
       </div>
 
+      {/* Live engine health + usage, directly under the selector */}
+      <AgentStatsBar />
+
       {/* API key input (toggled by key icon) */}
-      <Show when={showSettings() && settings().aiProvider !== "ollama"}>
+      <Show when={showSettings() && settings().aiProvider !== "local"}>
         <div
           class="flex items-center gap-1.5 shrink-0 px-2 py-1.5"
           style={{ "border-bottom": "1px solid var(--border-default)" }}
@@ -787,21 +671,8 @@ const AgentChatPanel: Component = () => {
       {/* Model browser — full overlay over chat when open */}
       <Show when={modelDropdownOpen()}>
         <ModelBrowser
-          modelSearch={modelSearch}
-          setModelSearch={setModelSearch}
-          modelSort={modelSort}
-          setModelSort={setModelSort}
-          modelProviderFilter={modelProviderFilter}
-          setModelProviderFilter={setModelProviderFilter}
-          openRouterModels={openRouterModels}
-          ollamaModels={ollamaModels}
-          fetchingModels={fetchingModels}
-          loadingOllamaModels={loadingOllamaModels}
-          loadOllamaModels={loadOllamaModels}
-          filteredModels={filteredModels}
-          handleModelChange={handleModelChange}
-          setModelDropdownOpen={setModelDropdownOpen}
-          handleProviderChange={handleProviderChange}
+          onPick={handlePickModel}
+          onClose={() => setModelDropdownOpen(false)}
         />
       </Show>
 
@@ -1555,21 +1426,6 @@ const AgentChatPanel: Component = () => {
               </button>
             </Show>
 
-            <span
-              title={(() => {
-                const t = agentTokens();
-                return `Prompt: ${t.prompt.toLocaleString()} · Completion: ${t.completion.toLocaleString()} · Context: ${t.context.toLocaleString()}`;
-              })()}
-              style={{ "font-family": "var(--font-mono, monospace)", opacity: 0.75, "font-size": "11px" }}
-            >
-              {(() => {
-                const t = agentTokens();
-                const total = t.prompt + t.completion;
-                const cost = (t.prompt * 3 + t.completion * 15) / 1_000_000;
-                const totalStr = total >= 1000 ? `${(total / 1000).toFixed(1)}k` : `${total}`;
-                return `${totalStr} · $${cost.toFixed(2)}`;
-              })()}
-            </span>
           </div>
         </div>
       </div>

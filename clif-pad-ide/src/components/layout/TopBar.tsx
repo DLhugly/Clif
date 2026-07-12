@@ -5,7 +5,6 @@ import type { Theme } from "../../stores/uiStore";
 import { settings, updateSettings } from "../../stores/settingsStore";
 import { projectRoot } from "../../stores/fileStore";
 import { MONO_FONTS, loadGoogleFont, applyUiFont } from "../../lib/fonts";
-import UnifiedModelSelector from "./UnifiedModelSelector";
 
 // ---------------------------------------------------------------------------
 // Inline SVG icons
@@ -496,8 +495,6 @@ const TopBar: Component<{
         >
           <FolderIcon />
         </IconButton>
-
-        <UnifiedModelSelector />
 
         <IconButton
           label="Models"

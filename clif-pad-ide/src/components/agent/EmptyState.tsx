@@ -18,7 +18,7 @@ const EmptyState: Component<EmptyStateProps> = (props) => {
         <SparkleIcon />
       </div>
       <Show
-        when={props.hasApiKey() || settings().aiProvider === "ollama"}
+        when={props.hasApiKey() || settings().aiProvider === "local"}
         fallback={
           <>
             <p

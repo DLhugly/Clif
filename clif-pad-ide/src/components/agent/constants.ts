@@ -1,10 +1,5 @@
 // Agent panel constants & types — extracted from AgentChatPanel.tsx
 
-export const PROVIDERS = [
-  { value: "openrouter", label: "OpenRouter", hint: "openrouter.ai — access 100+ models" },
-  { value: "ollama", label: "Ollama", hint: "Local models — no API key needed" },
-];
-
 export const POPULAR_MODELS: Record<string, { value: string; label: string }[]> = {
   openrouter: [
     { value: "anthropic/claude-sonnet-4", label: "Claude Sonnet 4" },
@@ -13,14 +8,6 @@ export const POPULAR_MODELS: Record<string, { value: string; label: string }[]> 
     { value: "openai/gpt-4o-mini", label: "GPT-4o Mini" },
     { value: "google/gemini-2.5-flash-preview", label: "Gemini 2.5 Flash" },
     { value: "deepseek/deepseek-chat-v3", label: "DeepSeek V3" },
-  ],
-  ollama: [
-    { value: "llama3.1", label: "Llama 3.1" },
-    { value: "codellama", label: "Code Llama" },
-    { value: "mistral", label: "Mistral" },
-    { value: "deepseek-coder-v2", label: "DeepSeek Coder V2" },
-    { value: "qwen3-coder:30b", label: "qwen3-coder:30b" },
-    { value: "qwen2.5-coder", label: "Qwen 2.5 Coder" },
   ],
 };
 
