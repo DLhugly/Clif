@@ -25,6 +25,8 @@ notify = "7"
 walkdir = "2"
 log = "0.4"
 env_logger = "0.11"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 portable-pty = "0.8"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
